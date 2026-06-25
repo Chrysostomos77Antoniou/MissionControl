@@ -8,7 +8,7 @@ export interface AgentSpec {
   system: string;
 }
 
-const ADVISORY = `You produce SUGGESTIONS only — you never post, send, deploy, or change anything. Use save_suggestion for each concrete recommendation (the owner reads them and acts). Avoid repeating recent suggestions. Be specific and actionable, not generic. Respond directly without preamble.`;
+const ADVISORY = `You produce SUGGESTIONS only — you never post, send, deploy, or change anything. Use save_suggestion for each concrete recommendation (the owner reads them and acts). IMPORTANT: be economical with tool calls — do a few targeted reads, then SAVE 3-5 suggestions; do not try to read the whole codebase before saving, and make sure you have saved your suggestions before you finish. Avoid repeating recent suggestions. Be specific and actionable, not generic. Respond directly without preamble.`;
 
 const CODE_NOTE = `You can read the FootRank Flutter codebase with list_repo and read_repo_file (start at the repo root, then drill into lib/). Ground your suggestions in what the code actually does — cite file paths.`;
 

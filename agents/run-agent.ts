@@ -16,6 +16,7 @@ export async function runAgent(spec: AgentSpec): Promise<string> {
     system: spec.system,
     userMessage,
     tools: toolsFor(spec.id),
+    maxTurns: 18,
   });
   await writeMemory(spec.id, summary.slice(0, 500));
   return summary;
