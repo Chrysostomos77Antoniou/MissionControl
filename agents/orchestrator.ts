@@ -15,9 +15,18 @@ function stream(system: string, message: string): ReadableStream {
   const encoder = new TextEncoder();
   return new ReadableStream({
     async start(controller) {
-      s.on("text", (d) => controller.enqueue(encoder.encode(d)));
-      await s.finalMessage();
-      controller.close();
+      try {
+        s.on("text", (d) => controller.enqueue(encoder.encode(d)));
+        await s.finalMessage();
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        const friendly = /credit balance/i.test(msg)
+          ? "⚠ Anthropic credit balance too low — add funds to use the agents."
+          : `⚠ Agent error: ${msg.slice(0, 200)}`;
+        controller.enqueue(encoder.encode(friendly));
+      } finally {
+        controller.close();
+      }
     },
   });
 }

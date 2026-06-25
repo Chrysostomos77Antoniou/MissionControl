@@ -20,24 +20,33 @@ export function ChatPanel({
     setInput("");
     setBusy(true);
     setMsgs((m) => [...m, { role: "you", text: q }, { role: "agent", text: "" }]);
-    const res = await fetch(endpoint, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message: q }),
-    });
-    const reader = res.body!.getReader();
-    const dec = new TextDecoder();
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      const chunk = dec.decode(value);
+    const setLast = (text: string) =>
       setMsgs((m) => {
         const c = [...m];
-        c[c.length - 1] = { role: "agent", text: c[c.length - 1].text + chunk };
+        c[c.length - 1] = { role: "agent", text };
         return c;
       });
+    try {
+      const res = await fetch(endpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message: q }),
+      });
+      if (!res.ok || !res.body) throw new Error(`server ${res.status}`);
+      const reader = res.body.getReader();
+      const dec = new TextDecoder();
+      let acc = "";
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        acc += dec.decode(value);
+        setLast(acc);
+      }
+    } catch {
+      setLast("⚠ Could not reach the agent. Check that the app and Anthropic credits are available.");
+    } finally {
+      setBusy(false);
     }
-    setBusy(false);
   };
 
   return (
