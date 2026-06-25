@@ -55,7 +55,10 @@ Approving an item runs `executeApproval` (`lib/execute.ts`) and logs the result 
 | GitHub **issue** | Created via GitHub REST API | `GITHUB_TOKEN`, `GITHUB_REPO` (`owner/name`) |
 | GitHub **PR** | Not auto-created (needs a branch + diff) — create manually | — |
 | **Facebook** post | Published to the Page feed via Graph API | `FACEBOOK_ACCESS_TOKEN`, `FACEBOOK_PAGE_ID` |
+| **Instagram** post | Generates an image (Replicate FLUX) from the agent's media hint → uploads to the public `mc-media` Supabase Storage bucket → creates a media container → publishes via Graph API | `REPLICATE_API_TOKEN`, `INSTAGRAM_USER_ID` (Business account), `INSTAGRAM_ACCESS_TOKEN` (with `instagram_content_publish`) |
 | **Push notification** | Sent via FCM to a topic derived from the audience (default `all`) | `FIREBASE_SERVICE_ACCOUNT` (JSON, one line); users subscribed to the topic |
-| **Instagram / TikTok / YouTube** | Not auto-posted — agents draft captions/scripts, not media files. Use the draft to post manually | — |
+| **TikTok / YouTube** | Not auto-posted — agents draft video *scripts*, not video files. Use the draft to produce + post manually | — |
 
-If an actuator can't run (missing env or media-dependent platform), the approval still records as `approved` and the failure reason is shown on the card and logged. Wiring Instagram/TikTok/YouTube would require a media-generation or upload step — a future addition.
+If an actuator can't run (missing env or media-dependent platform), the approval still records as `approved` and the failure reason is shown on the card and logged. TikTok/YouTube would need a video-generation/upload step — a future addition.
+
+> **Instagram prerequisites:** the account must be an Instagram **Business** account linked to a Facebook Page, and the token needs `instagram_content_publish`. `INSTAGRAM_USER_ID` is the IG Business account ID (from the Graph API, not the @handle).
