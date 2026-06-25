@@ -5,6 +5,7 @@ import { SuggestionsFeed } from "./components/SuggestionsFeed";
 import { LiveFeed } from "./components/LiveFeed";
 import { ChatBubble } from "./components/ChatBubble";
 import { QARunButton } from "./components/QARunButton";
+import { LogoutButton } from "./components/LogoutButton";
 
 export const dynamic = "force-dynamic";
 
@@ -22,6 +23,7 @@ export default async function Home() {
         <div className="flex items-center gap-4">
           <QARunButton />
           <span className="text-xs" style={{ color: "var(--growth)" }}>● SYSTEMS OPERATIONAL</span>
+          <LogoutButton />
         </div>
       </header>
       <div className="grid grid-cols-[240px_1fr_320px] gap-4">
