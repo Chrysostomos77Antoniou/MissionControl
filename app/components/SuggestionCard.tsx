@@ -4,11 +4,15 @@ import { AGENT_BY_ID } from "../../agents/registry";
 import type { Suggestion } from "../../lib/types";
 
 const PRIORITY: Record<string, string> = { high: "#ff4d6d", medium: "#ffaa00", low: "#8a8a93" };
+const BLUE = "#3b82f6";
+const RED = "#e5484d";
 
 export function SuggestionCard({ s, onResolve }: { s: Suggestion; onResolve: () => void }) {
   const accent = AGENT_BY_ID[s.agent]?.accent ?? "var(--text-dim)";
-  const [busy, setBusy] = useState(false);
+  const [busy, setBusy] = useState<null | "handle" | "finalize">(null);
   const [result, setResult] = useState<string | null>(s.result);
+  const [handled, setHandled] = useState<boolean>(!!s.result);
+  const [note, setNote] = useState("");
 
   const act = async (status: "done" | "dismissed") => {
     await fetch(`/api/suggestions/${s.id}`, {
@@ -20,11 +24,23 @@ export function SuggestionCard({ s, onResolve }: { s: Suggestion; onResolve: () 
   };
 
   const handle = async () => {
-    setBusy(true);
+    setBusy("handle");
+    setNote("");
     const res = await fetch(`/api/suggestions/${s.id}/handle`, { method: "POST" });
     const data = (await res.json()) as { result: string };
-    setBusy(false);
+    setBusy(null);
     setResult(data.result);
+    setHandled(true);
+  };
+
+  const finalize = async () => {
+    setBusy("finalize");
+    setNote("");
+    const res = await fetch(`/api/suggestions/${s.id}/finalize`, { method: "POST" });
+    const data = (await res.json()) as { ok: boolean; detail: string };
+    setBusy(null);
+    if (data.ok) onResolve(); // task disappears
+    else setNote(`⚠ ${data.detail}`);
   };
 
   return (
@@ -45,23 +61,25 @@ export function SuggestionCard({ s, onResolve }: { s: Suggestion; onResolve: () 
       <div className="flex gap-2 flex-wrap">
         <button
           onClick={handle}
-          disabled={busy}
+          disabled={busy !== null}
           className="px-4 py-1 rounded text-xs font-semibold"
-          style={{ background: accent, color: "#000" }}
+          style={{ background: BLUE, color: "#fff" }}
         >
-          {busy ? "Agent working…" : "✓ Okay — agent handles it"}
+          {busy === "handle" ? "Agent working…" : "✓ Okay — agent handles it"}
         </button>
         <button
           onClick={() => act("done")}
+          disabled={busy !== null}
           className="px-3 py-1 rounded text-xs"
-          style={{ background: "var(--growth)", color: "#000" }}
+          style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--text-dim)" }}
         >
           Mark done
         </button>
         <button
           onClick={() => act("dismissed")}
-          className="px-3 py-1 rounded text-xs"
-          style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--text-dim)" }}
+          disabled={busy !== null}
+          className="px-3 py-1 rounded text-xs font-semibold"
+          style={{ background: RED, color: "#fff" }}
         >
           Dismiss
         </button>
@@ -76,6 +94,31 @@ export function SuggestionCard({ s, onResolve }: { s: Suggestion; onResolve: () 
             Agent result
           </div>
           {result}
+          {s.pr_url && (
+            <div className="mt-1">
+              <a href={s.pr_url} target="_blank" rel="noreferrer" style={{ color: BLUE }}>
+                {s.pr_url}
+              </a>
+            </div>
+          )}
+        </div>
+      )}
+
+      {handled && (
+        <div className="mt-3">
+          <button
+            onClick={finalize}
+            disabled={busy !== null}
+            className="px-4 py-1 rounded text-xs font-semibold"
+            style={{ background: "var(--growth)", color: "#000" }}
+          >
+            {busy === "finalize" ? "Committing & testing…" : "🚀 Commit, push & test"}
+          </button>
+          {note && (
+            <div className="text-xs mt-2" style={{ color: "var(--content)" }}>
+              {note}
+            </div>
+          )}
         </div>
       )}
     </div>

@@ -22,6 +22,7 @@ export interface Suggestion {
   priority: "low" | "medium" | "high";
   status: "new" | "done" | "dismissed";
   result: string | null;
+  pr_url: string | null;
   created_at: string;
 }
 

@@ -11,15 +11,15 @@ export async function runAgent(spec: AgentSpec): Promise<string> {
     memory.map((m) => `- ${m.summary}`).join("\n") || "none"
   }\n\nRun your review now and save concrete suggestions.`;
 
-  const summary = await runAgentLoop({
+  const { text } = await runAgentLoop({
     agent: spec.id,
     system: spec.system,
     userMessage,
     tools: toolsFor(spec.id),
     maxTurns: 18,
   });
-  await writeMemory(spec.id, summary.slice(0, 500));
-  return summary;
+  await writeMemory(spec.id, text.slice(0, 500));
+  return text;
 }
 
 export async function runGroup(cadence: Cadence): Promise<Record<string, string>> {
@@ -58,14 +58,17 @@ ${s.body}
 
 Execute it now.`;
 
-  const result = await runAgentLoop({
+  const { text, toolOutputs } = await runAgentLoop({
     agent: s.agent,
     system,
     userMessage,
     tools: handlerToolsFor(s.agent),
     maxTurns: 14,
   });
-  await recordResult(s.id, result);
+  // Capture the opened PR URL deterministically from the tool output.
+  const prLine = toolOutputs.find((o) => o.startsWith("Opened PR: "));
+  const prUrl = prLine ? prLine.replace("Opened PR: ", "").trim() : null;
+  await recordResult(s.id, text, prUrl);
   await logActivity(s.agent, "handled", s.title.slice(0, 120));
-  return result;
+  return text;
 }
