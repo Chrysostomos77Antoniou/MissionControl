@@ -7,11 +7,19 @@ export async function saveSuggestion(input: {
   title: string;
   body: string;
   priority: "low" | "medium" | "high";
+  publishable?: boolean;
+  platform?: string;
+  post_text?: string;
 }): Promise<void> {
-  await supabaseAdmin.from("suggestions").insert(input);
+  await supabaseAdmin.from("suggestions").insert({
+    ...input,
+    publishable: input.publishable ?? false,
+  });
 }
 
-export async function listSuggestions(status: "new" | "done" | "dismissed" = "new"): Promise<Suggestion[]> {
+export async function listSuggestions(
+  status: "new" | "done" | "dismissed" | "published" = "new",
+): Promise<Suggestion[]> {
   const { data } = await supabaseAdmin
     .from("suggestions")
     .select("*")
@@ -20,9 +28,14 @@ export async function listSuggestions(status: "new" | "done" | "dismissed" = "ne
   return (data ?? []) as Suggestion[];
 }
 
+export async function getSuggestion(id: string): Promise<Suggestion | null> {
+  const { data } = await supabaseAdmin.from("suggestions").select("*").eq("id", id).single();
+  return (data as Suggestion) ?? null;
+}
+
 export async function updateSuggestion(
   id: string,
-  status: "new" | "done" | "dismissed",
+  status: "new" | "done" | "dismissed" | "published",
 ): Promise<void> {
   await supabaseAdmin.from("suggestions").update({ status }).eq("id", id);
 }

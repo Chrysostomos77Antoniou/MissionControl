@@ -10,7 +10,8 @@ type ToolName =
   | "read_footrank_stats"
   | "list_repo"
   | "read_repo_file"
-  | "save_suggestion";
+  | "save_suggestion"
+  | "draft_facebook_post";
 
 const ALL_TOOLS: Record<ToolName, Anthropic.Tool> = {
   web_search: {
@@ -51,6 +52,20 @@ const ALL_TOOLS: Record<ToolName, Anthropic.Tool> = {
       required: ["category", "title", "body", "priority"],
     },
   },
+  draft_facebook_post: {
+    name: "draft_facebook_post",
+    description:
+      "Draft a READY-TO-PUBLISH Facebook text post (no media needed). The owner sees a one-click Publish button for it. Only use for complete captions the owner could post as-is — use save_suggestion for video ideas or campaign concepts instead.",
+    input_schema: {
+      type: "object",
+      properties: {
+        post_text: { type: "string", description: "The exact post text to publish, including hashtags." },
+        rationale: { type: "string", description: "Why this post now (shown to the owner)." },
+        priority: { type: "string", enum: ["low", "medium", "high"] },
+      },
+      required: ["post_text", "rationale", "priority"],
+    },
+  },
 };
 
 const BASE: ToolName[] = ["web_search", "read_footrank_stats", "save_suggestion"];
@@ -63,7 +78,7 @@ const TOOLSETS: Record<AgentId, ToolName[]> = {
   developer: WITH_CODE,
   qa: WITH_CODE,
   uxdesign: WITH_CODE,
-  marketing: BASE,
+  marketing: [...BASE, "draft_facebook_post"],
   growth: BASE,
   data: BASE,
   community: BASE,
@@ -100,6 +115,20 @@ export async function dispatchTool(
           : "medium") as "low" | "medium" | "high",
       });
       return "Saved to the owner's suggestions inbox.";
+    case "draft_facebook_post":
+      await saveSuggestion({
+        agent,
+        category: "facebook-post",
+        title: "Ready-to-publish Facebook post",
+        body: String(input.rationale ?? ""),
+        priority: (["low", "medium", "high"].includes(String(input.priority))
+          ? String(input.priority)
+          : "medium") as "low" | "medium" | "high",
+        publishable: true,
+        platform: "facebook",
+        post_text: String(input.post_text),
+      });
+      return "Saved a ready-to-publish Facebook post to the inbox (owner can one-click publish).";
     default:
       return `Unknown tool: ${name}`;
   }
