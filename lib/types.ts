@@ -1,15 +1,27 @@
-export type AgentId = "marketing" | "growth" | "content";
+export type AgentId =
+  | "cybersecurity"
+  | "engineering"
+  | "developer"
+  | "qa"
+  | "uxdesign"
+  | "marketing"
+  | "growth"
+  | "data"
+  | "community"
+  | "competitive"
+  | "monetization";
 
-export interface Approval {
+export type Cadence = "hourly" | "4h" | "daily" | "5day" | "ondemand";
+
+export interface Suggestion {
   id: string;
   agent: AgentId;
-  action_type: string;
-  payload: Record<string, unknown>;
-  preview: string;
-  status: "pending" | "approved" | "rejected";
-  rejection_reason: string | null;
+  category: string | null;
+  title: string;
+  body: string;
+  priority: "low" | "medium" | "high";
+  status: "new" | "done" | "dismissed";
   created_at: string;
-  resolved_at: string | null;
 }
 
 export interface ActivityEntry {
@@ -25,15 +37,5 @@ export interface MemoryEntry {
   agent: AgentId;
   cycle_at: string;
   summary: string;
-  created_at: string;
-}
-
-export interface ContentDraft {
-  id: string;
-  agent: AgentId;
-  type: string;
-  title: string;
-  body: string;
-  status: "draft" | "approved" | "used";
   created_at: string;
 }

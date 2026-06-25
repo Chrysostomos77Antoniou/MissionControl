@@ -1,3 +1,8 @@
 {
-  "crons": [{ "path": "/api/cycle", "schedule": "0 */4 * * *" }]
+  "crons": [
+    { "path": "/api/cycle?group=hourly", "schedule": "0 * * * *" },
+    { "path": "/api/cycle?group=4h", "schedule": "0 */4 * * *" },
+    { "path": "/api/cycle?group=daily", "schedule": "0 9 * * *" },
+    { "path": "/api/cycle?group=5day", "schedule": "0 10 */5 * *" }
+  ]
 }

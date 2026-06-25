@@ -1,6 +1,6 @@
 import type Anthropic from "@anthropic-ai/sdk";
 import { anthropic, MODEL } from "../lib/anthropic";
-import { TOOL_DEFS, dispatchTool } from "../tools/registry";
+import { dispatchTool } from "../tools/registry";
 import { logActivity } from "../lib/memory";
 import type { AgentId } from "../lib/types";
 
@@ -8,9 +8,10 @@ export async function runAgentLoop(opts: {
   agent: AgentId;
   system: string;
   userMessage: string;
+  tools: Anthropic.Tool[];
   maxTurns?: number;
 }): Promise<string> {
-  const { agent, system, userMessage, maxTurns = 6 } = opts;
+  const { agent, system, userMessage, tools, maxTurns = 8 } = opts;
   const messages: Anthropic.MessageParam[] = [{ role: "user", content: userMessage }];
 
   const finalText = (content: Anthropic.ContentBlock[]) =>
@@ -25,13 +26,11 @@ export async function runAgentLoop(opts: {
       max_tokens: 8000,
       thinking: { type: "adaptive" },
       system,
-      tools: TOOL_DEFS,
+      tools,
       messages,
     });
 
-    if (response.stop_reason === "end_turn") {
-      return finalText(response.content);
-    }
+    if (response.stop_reason === "end_turn") return finalText(response.content);
 
     messages.push({ role: "assistant", content: response.content });
 
@@ -43,9 +42,7 @@ export async function runAgentLoop(opts: {
         toolResults.push({ type: "tool_result", tool_use_id: block.id, content: result });
       }
     }
-    if (toolResults.length === 0) {
-      return finalText(response.content);
-    }
+    if (toolResults.length === 0) return finalText(response.content);
     messages.push({ role: "user", content: toolResults });
   }
   return "Reached max turns.";

@@ -1,64 +1,52 @@
 # FootRank Mission Control
 
-A standalone dashboard that runs three autonomous AI agents (Marketing, Growth, Content) for the FootRank app on a 4-hour cycle. Low-risk actions (web research, data reads, saving drafts) run automatically; high-risk actions (social posts, push notifications, GitHub issues/PRs) are queued for one-tap owner approval. The owner can also message the orchestrator directly.
+A dashboard where a team of **advisory AI agents** continuously review FootRank and write concrete suggestions into an inbox you read and act on. **Nothing is posted, sent, deployed, or auto-executed** — every agent only produces recommendations (including video/Reel ideas you film yourself). Technical agents read the FootRank Flutter codebase from GitHub to give file-level advice.
 
 ## Stack
 
 Next.js 15 (App Router) · TypeScript · `@anthropic-ai/sdk` (`claude-opus-4-8`) · Supabase · Tailwind v4 · Vercel Cron.
 
+## Agents & cadence
+
+| Agent | Runs | Reads code? | Focus |
+|---|---|---|---|
+| Cybersecurity | hourly | ✓ | Auth/RLS hardening, dep & data-exposure risks, CVEs |
+| Engineering | every 4h | ✓ | Architecture, scalability, tech debt, infra cost |
+| Developer | every 4h | ✓ | Feature ideas + implementation notes |
+| QA | on demand (button) | ✓ | Test gaps, edge cases, manual test scripts |
+| UX/Design | every 5 days | ✓ | Flow & UI friction, onboarding drop-off |
+| Marketing | daily | — | Campaigns, posts, short-form video concepts |
+| Growth Analyst | daily | — | Funnel, retention, churn, activation |
+| Data Analyst | daily | — | Cohorts, anomalies, what to measure |
+| Community & Trust/Safety | daily | — | Moderation, fair-play (reads `behavior_reports`) |
+| Competitive Intel | daily | — | Rival apps & market trends |
+| Monetization | daily | — | Pricing, premium features, revenue ideas |
+
 ## Setup
 
 1. `npm install`
-2. Copy `.env.local.example` to `.env.local` and fill in:
-
-| Var | Purpose |
-|---|---|
-| `ANTHROPIC_API_KEY` | Claude API (agents + orchestrator) |
-| `SUPABASE_URL`, `SUPABASE_SERVICE_KEY` | Shared FootRank Supabase project (service role) |
-| `TAVILY_API_KEY` | Web search tool |
-| `FACEBOOK_ACCESS_TOKEN`, `INSTAGRAM_ACCESS_TOKEN`, `TIKTOK_ACCESS_TOKEN`, `YOUTUBE_API_KEY` | Social posting (on approval — v1 actuators stubbed) |
-| `FIREBASE_SERVICE_ACCOUNT` | Push notifications (on approval — v1 actuator stubbed) |
-| `GITHUB_TOKEN` | GitHub issues/PRs (on approval — v1 actuator stubbed) |
-| `CRON_SECRET` | Shared secret guarding `POST /api/cycle` |
-
-3. Apply the DB migration in `supabase/migrations/0001_mission_control.sql` (already applied to the FootRank Supabase project during setup).
+2. Copy `.env.local.example` → `.env.local` and fill in: `SUPABASE_URL`, `SUPABASE_SERVICE_KEY`, `ANTHROPIC_API_KEY`, `TAVILY_API_KEY`, `CRON_SECRET`, and for the technical agents `GITHUB_TOKEN` (repo read) + `GITHUB_REPO` (`owner/name`).
+3. Migrations in `supabase/migrations/` are already applied to the FootRank Supabase project.
 
 ## Running
 
-- `npm run dev` — dashboard at http://localhost:3000
+- `npm run dev` — dashboard at http://localhost:3000 (agent roster + suggestions inbox + live feed + orchestrator chat)
 - `npm test` — unit tests
-- Trigger a cycle manually:
+- Trigger a cadence group manually:
   ```bash
-  curl -X POST http://localhost:3000/api/cycle -H "Authorization: Bearer $CRON_SECRET"
+  curl -X POST "http://localhost:3000/api/cycle?group=daily" -H "Authorization: Bearer $CRON_SECRET"
+  # groups: hourly | 4h | daily | 5day
   ```
+- Run QA on demand: the **▶ Run QA** button on the dashboard (or `POST /api/qa`).
 
-## Autonomy & approvals
+## Cron (Vercel)
 
-- **Cadence:** every 4 hours (`vercel.json` cron → `POST /api/cycle`).
-- **Autonomous (no approval):** web research, Supabase reads, saving content drafts, activity logging.
-- **Approval required:** social posts (Facebook/Instagram/TikTok/YouTube), push notifications, GitHub issues/PRs. These are written to the `approvals` table and never execute until approved at `/approvals`.
+`vercel.json` schedules the four cadence groups. **Sub-daily crons (hourly, 4h) require a Vercel Pro plan** — on Hobby, only the daily/5-day schedules fire; trigger the others manually or with an external scheduler.
 
-### Cron auth note
+## How suggestions flow
 
-Vercel Cron invokes the path without a custom `Authorization` header. To keep the `CRON_SECRET` guard, either configure the cron to send the header, or switch the route guard in `app/api/cycle/route.ts` to verify Vercel's `x-vercel-cron` request signal.
+Each agent runs its tool loop (`web_search`, `read_footrank_stats`, and for technical agents `list_repo`/`read_repo_file`), then calls `save_suggestion` for each recommendation. Suggestions land in the `suggestions` table and appear in the inbox with agent, category, and priority. You **Mark done** or **Dismiss**. Agents see their last 5 suggestions each run to avoid repeating themselves.
 
 ## Owner-only access
 
-Single-user system for `tomisapoelcity@gmail.com`. Auth is **not yet enforced in code** — add Supabase Auth middleware gating every route to that email before deploying publicly.
-
-## Actuators (what happens on approval)
-
-Approving an item runs `executeApproval` (`lib/execute.ts`) and logs the result to the live feed:
-
-| Action | On approval | Needs |
-|---|---|---|
-| GitHub **issue** | Created via GitHub REST API | `GITHUB_TOKEN`, `GITHUB_REPO` (`owner/name`) |
-| GitHub **PR** | Not auto-created (needs a branch + diff) — create manually | — |
-| **Facebook** post | Published to the Page feed via Graph API | `FACEBOOK_ACCESS_TOKEN`, `FACEBOOK_PAGE_ID` |
-| **Instagram** post | Generates an image (Replicate FLUX) from the agent's media hint → uploads to the public `mc-media` Supabase Storage bucket → creates a media container → publishes via Graph API | `REPLICATE_API_TOKEN`, `INSTAGRAM_USER_ID` (Business account), `INSTAGRAM_ACCESS_TOKEN` (with `instagram_content_publish`) |
-| **Push notification** | Sent via FCM to a topic derived from the audience (default `all`) | `FIREBASE_SERVICE_ACCOUNT` (JSON, one line); users subscribed to the topic |
-| **TikTok / YouTube** | Not auto-posted — agents draft video *scripts*, not video files. Use the draft to produce + post manually | — |
-
-If an actuator can't run (missing env or media-dependent platform), the approval still records as `approved` and the failure reason is shown on the card and logged. TikTok/YouTube would need a video-generation/upload step — a future addition.
-
-> **Instagram prerequisites:** the account must be an Instagram **Business** account linked to a Facebook Page, and the token needs `instagram_content_publish`. `INSTAGRAM_USER_ID` is the IG Business account ID (from the Graph API, not the @handle).
+Single-user system for `tomisapoelcity@gmail.com`. Auth is **not yet enforced in code** — add Supabase Auth middleware gating every route (and the cron/QA endpoints) before deploying publicly.

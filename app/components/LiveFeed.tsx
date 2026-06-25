@@ -1,12 +1,7 @@
 "use client";
 import { useEffect, useState } from "react";
-import type { ActivityEntry, AgentId } from "../../lib/types";
-
-const ACCENT: Record<AgentId, string> = {
-  marketing: "var(--marketing)",
-  growth: "var(--growth)",
-  content: "var(--content)",
-};
+import { AGENT_BY_ID } from "../../agents/registry";
+import type { ActivityEntry } from "../../lib/types";
 
 export function LiveFeed() {
   const [entries, setEntries] = useState<ActivityEntry[]>([]);
@@ -17,11 +12,13 @@ export function LiveFeed() {
     return () => clearInterval(t);
   }, []);
   return (
-    <div className="font-mono text-xs space-y-1">
+    <div className="font-mono text-[11px] space-y-1">
       {entries.map((e) => (
         <div key={e.id}>
-          <span style={{ color: ACCENT[e.agent] }}>[{e.agent}]</span> {e.action}{" "}
-          {e.detail ? `— ${e.detail}` : ""}
+          <span style={{ color: AGENT_BY_ID[e.agent]?.accent ?? "var(--text-dim)" }}>
+            [{e.agent}]
+          </span>{" "}
+          {e.action} {e.detail ? `— ${e.detail.slice(0, 80)}` : ""}
         </div>
       ))}
     </div>

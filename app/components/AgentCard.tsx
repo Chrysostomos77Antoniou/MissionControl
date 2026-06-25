@@ -1,39 +1,34 @@
 "use client";
-import type { AgentId } from "../../lib/types";
+import Link from "next/link";
+import type { AgentSpec } from "../../agents/registry";
 
-const ACCENT: Record<AgentId, string> = {
-  marketing: "var(--marketing)",
-  growth: "var(--growth)",
-  content: "var(--content)",
+const CADENCE_LABEL: Record<string, string> = {
+  hourly: "every hour",
+  "4h": "every 4h",
+  daily: "daily",
+  "5day": "every 5 days",
+  ondemand: "on demand",
 };
 
-export function AgentCard({
-  agent,
-  status,
-  lastRun,
-  tasksToday,
-}: {
-  agent: AgentId;
-  status: string;
-  lastRun: string;
-  tasksToday: number;
-}) {
+export function AgentCard({ spec, lastRun }: { spec: AgentSpec; lastRun: string }) {
   return (
-    <div
-      style={{ borderLeft: `3px solid ${ACCENT[agent]}`, background: "var(--surface)", border: "1px solid var(--border)" }}
-      className="rounded-lg p-3 mb-2"
-    >
-      <div className="flex justify-between items-center">
-        <span className="font-semibold uppercase" style={{ color: ACCENT[agent] }}>
-          {agent}
-        </span>
-        <span className="text-xs" style={{ color: "var(--text-dim)" }}>
-          {status}
-        </span>
+    <Link href={`/agents/${spec.id}`} className="block">
+      <div
+        style={{ borderLeft: `3px solid ${spec.accent}`, background: "var(--surface)", border: "1px solid var(--border)" }}
+        className="rounded-lg p-3 mb-2 hover:brightness-125 transition"
+      >
+        <div className="flex justify-between items-center">
+          <span className="font-semibold text-sm" style={{ color: spec.accent }}>
+            {spec.name}
+          </span>
+          <span className="text-[10px] uppercase" style={{ color: "var(--text-dim)" }}>
+            {CADENCE_LABEL[spec.cadence]}
+          </span>
+        </div>
+        <div className="text-[10px] mt-1" style={{ color: "var(--text-dim)" }}>
+          last run: {lastRun}
+        </div>
       </div>
-      <div className="text-xs mt-1" style={{ color: "var(--text-dim)" }}>
-        Last run: {lastRun} · {tasksToday} today
-      </div>
-    </div>
+    </Link>
   );
 }
