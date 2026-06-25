@@ -31,6 +31,21 @@ export async function updateSuggestion(id: string, status: "new" | "done" | "dis
   await supabaseAdmin.from("suggestions").update({ status }).eq("id", id);
 }
 
+export async function updateQa(
+  id: string,
+  fields: Partial<{
+    qa_status: string | null;
+    qa_branch: string | null;
+    qa_run_id: string | null;
+    qa_attempts: number;
+    qa_log: string | null;
+    result: string;
+    outcome: "fixed" | "action_needed";
+  }>,
+): Promise<void> {
+  await supabaseAdmin.from("suggestions").update(fields).eq("id", id);
+}
+
 export async function recordResult(
   id: string,
   result: string,

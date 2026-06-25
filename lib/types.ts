@@ -24,6 +24,11 @@ export interface Suggestion {
   result: string | null;
   pr_url: string | null;
   outcome: "fixed" | "action_needed" | null;
+  qa_status: "testing" | "fixing" | "passed" | "needs_owner" | null;
+  qa_branch: string | null;
+  qa_run_id: string | null;
+  qa_attempts: number;
+  qa_log: string | null;
   created_at: string;
 }
 

@@ -15,8 +15,9 @@ export async function runAgentLoop(opts: {
   userMessage: string;
   tools: Anthropic.Tool[];
   maxTurns?: number;
+  dispatch?: (agent: AgentId, name: string, input: Record<string, unknown>) => Promise<string>;
 }): Promise<LoopOutput> {
-  const { agent, system, userMessage, tools, maxTurns = 8 } = opts;
+  const { agent, system, userMessage, tools, maxTurns = 8, dispatch = dispatchTool } = opts;
   const messages: Anthropic.MessageParam[] = [{ role: "user", content: userMessage }];
   const toolOutputs: string[] = [];
 
@@ -44,7 +45,7 @@ export async function runAgentLoop(opts: {
     for (const block of response.content) {
       if (block.type === "tool_use") {
         await logActivity(agent, `tool:${block.name}`, JSON.stringify(block.input).slice(0, 300));
-        const result = await dispatchTool(agent, block.name, block.input as Record<string, unknown>);
+        const result = await dispatch(agent, block.name, block.input as Record<string, unknown>);
         toolOutputs.push(result);
         toolResults.push({ type: "tool_result", tool_use_id: block.id, content: result });
       }
