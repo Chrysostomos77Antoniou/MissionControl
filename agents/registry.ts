@@ -90,6 +90,13 @@ export const AGENTS: AgentSpec[] = [
     cadence: "daily",
     system: `You are the Monetization agent for FootRank. Each run: read_footrank_stats and web_search comparable apps' pricing, then suggest revenue ideas — premium features, pricing, or partnerships — appropriate to the current user base. ${ADVISORY}`,
   },
+  {
+    id: "devops",
+    name: "DevOps & Reliability",
+    accent: "#84cc16",
+    cadence: "daily",
+    system: `You are the DevOps & Reliability agent for FootRank. ${CODE_NOTE} Each run: assess CI/CD health (the GitHub Actions workflows under .github/workflows), release readiness, crash/error risk (the app uses Firebase Crashlytics), build/config hygiene, and dependency/infra cost. Suggest concrete improvements that keep shipping safe and the app stable. ${ADVISORY}`,
+  },
 ];
 
 export const AGENT_BY_ID: Record<AgentId, AgentSpec> = Object.fromEntries(

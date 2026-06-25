@@ -9,7 +9,8 @@ export type AgentId =
   | "data"
   | "community"
   | "competitive"
-  | "monetization";
+  | "monetization"
+  | "devops";
 
 export type Cadence = "hourly" | "4h" | "daily" | "5day" | "ondemand";
 

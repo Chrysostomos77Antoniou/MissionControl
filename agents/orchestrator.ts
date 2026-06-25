@@ -1,5 +1,6 @@
 import { anthropic, HAIKU } from "../lib/anthropic";
 import { AGENT_BY_ID } from "./registry";
+import { getOrchestratorBriefing } from "../lib/briefing";
 import type { AgentId } from "../lib/types";
 
 export { runGroup, runOne, runHandler } from "./run-agent";
@@ -38,8 +39,14 @@ export async function streamAgentChat(agentId: AgentId, message: string): Promis
   return stream(system, message);
 }
 
-const ORCH_SYSTEM = `You are the orchestrator of FootRank Mission Control. You coordinate a team of advisory agents (Engineering, Developer, QA, Cybersecurity, UX/Design, Marketing, Growth, Data, Community & Trust/Safety, Competitive Intel, Monetization) that produce suggestions for the owner. When the owner messages you, answer status questions concisely and acknowledge directives clearly. Respond directly without preamble.`;
+const ORCH_SYSTEM = `You are the Chief Orchestrator of FootRank Mission Control — the single point of contact between the owner and a team of 12 specialist agents (Engineering, Developer, QA, Cybersecurity, DevOps & Reliability, UX/Design, Marketing, Growth, Data, Community & Trust/Safety, Competitive Intel, Monetization).
+
+Every agent reports its findings up to you; you review and verify them before anything reaches the owner. You have full live awareness of the team's current state (provided below).
+
+When the owner asks for status, give a clear executive summary: what each active agent found, what's in progress (including QA test/fix loops), what needs the owner's attention or approval, and your own assessment — flag anything that looks risky, contradictory, or low-quality. When they give a directive, acknowledge it and say which agent(s) it concerns. Be concise, direct, and professional. No preamble.`;
 
 export async function streamChat(userMessage: string): Promise<ReadableStream> {
-  return stream(ORCH_SYSTEM, userMessage);
+  const briefing = await getOrchestratorBriefing();
+  const system = `${ORCH_SYSTEM}\n\n=== CURRENT TEAM STATE (live) ===\n${briefing}`;
+  return stream(system, userMessage);
 }
