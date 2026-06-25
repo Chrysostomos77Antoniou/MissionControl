@@ -1,5 +1,5 @@
 import type Anthropic from "@anthropic-ai/sdk";
-import { anthropic, MODEL } from "../lib/anthropic";
+import { anthropic, OPUS } from "../lib/anthropic";
 import { dispatchTool } from "../tools/registry";
 import { logActivity } from "../lib/memory";
 import type { AgentId } from "../lib/types";
@@ -15,9 +15,10 @@ export async function runAgentLoop(opts: {
   userMessage: string;
   tools: Anthropic.Tool[];
   maxTurns?: number;
+  model?: string;
   dispatch?: (agent: AgentId, name: string, input: Record<string, unknown>) => Promise<string>;
 }): Promise<LoopOutput> {
-  const { agent, system, userMessage, tools, maxTurns = 8, dispatch = dispatchTool } = opts;
+  const { agent, system, userMessage, tools, maxTurns = 8, model = OPUS, dispatch = dispatchTool } = opts;
   const messages: Anthropic.MessageParam[] = [{ role: "user", content: userMessage }];
   const toolOutputs: string[] = [];
 
@@ -29,7 +30,7 @@ export async function runAgentLoop(opts: {
 
   for (let turn = 0; turn < maxTurns; turn++) {
     const response = await anthropic.messages.create({
-      model: MODEL,
+      model,
       max_tokens: 8000,
       thinking: { type: "adaptive" },
       system,

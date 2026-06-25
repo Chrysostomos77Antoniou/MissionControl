@@ -1,14 +1,14 @@
-import { anthropic, MODEL } from "../lib/anthropic";
+import { anthropic, HAIKU } from "../lib/anthropic";
 import { AGENT_BY_ID } from "./registry";
 import type { AgentId } from "../lib/types";
 
 export { runGroup, runOne, runHandler } from "./run-agent";
 
+// Chat is conversational — runs on Haiku (cheapest), no extended thinking.
 function stream(system: string, message: string): ReadableStream {
   const s = anthropic.messages.stream({
-    model: MODEL,
-    max_tokens: 4000,
-    thinking: { type: "adaptive" },
+    model: HAIKU,
+    max_tokens: 2000,
     system,
     messages: [{ role: "user", content: message }],
   });

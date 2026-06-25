@@ -1,4 +1,5 @@
 import { runAgentLoop } from "./run-loop";
+import { SONNET } from "../lib/anthropic";
 import { AGENTS, AGENT_BY_ID, type AgentSpec } from "./registry";
 import { toolsFor, handlerToolsFor } from "../tools/registry";
 import { recentMemory, writeMemory, logActivity } from "../lib/memory";
@@ -17,6 +18,7 @@ export async function runAgent(spec: AgentSpec): Promise<string> {
     userMessage,
     tools: toolsFor(spec.id),
     maxTurns: 18,
+    model: SONNET, // lighter suggestion-generation runs on Sonnet
   });
   await writeMemory(spec.id, text.slice(0, 500));
   return text;
