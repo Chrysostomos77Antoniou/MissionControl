@@ -29,7 +29,7 @@ export function RoomsDashboard() {
 
   return (
     <>
-      <div className="grid gap-3" style={{ gridTemplateColumns: "repeat(4,1fr)", gridTemplateRows: "repeat(4,120px)" }}>
+      <div className="grid gap-3" style={{ gridTemplateColumns: "repeat(4,1fr)", gridTemplateRows: "repeat(4,130px)" }}>
         {AGENTS.map((spec, i) => (
           <AgentRoom
             key={spec.id}
@@ -39,15 +39,18 @@ export function RoomsDashboard() {
             style={{ gridRow: POS[i][0], gridColumn: POS[i][1] }}
           />
         ))}
-        <div
-          style={{ gridRow: "2 / 4", gridColumn: "2 / 4", background: "var(--surface)", border: "1px solid var(--border)" }}
-          className="rounded-lg p-3 flex flex-col"
-        >
-          <div className="text-xs font-semibold mb-2" style={{ color: "var(--marketing)" }}>
-            ⬢ ORCHESTRATOR
+        <div className="glass bracket rounded-xl p-4 flex flex-col" style={{ gridRow: "2 / 4", gridColumn: "2 / 4" }}>
+          <div className="flex items-center gap-2 mb-3">
+            <span
+              className="w-2.5 h-2.5 rounded-full"
+              style={{ background: "var(--cyan)", boxShadow: "0 0 12px var(--cyan)", animation: "pulse 1.8s infinite" }}
+            />
+            <span className="font-display text-xs font-bold glow-text tracking-widest" style={{ color: "var(--cyan)" }}>
+              ORCHESTRATOR CORE
+            </span>
           </div>
           <div className="flex-1 min-h-0">
-            <ChatPanel endpoint="/api/chat" accent="var(--marketing)" placeholder="Direct the team or ask for status…" />
+            <ChatPanel endpoint="/api/chat" accent="var(--cyan)" placeholder="Issue a directive to the fleet…" />
           </div>
         </div>
       </div>
@@ -55,27 +58,38 @@ export function RoomsDashboard() {
       {openSpec && (
         <div
           className="fixed inset-0 flex items-center justify-center z-50"
-          style={{ background: "rgba(0,0,0,0.6)" }}
+          style={{ background: "rgba(2, 6, 14, 0.78)", backdropFilter: "blur(4px)" }}
           onClick={() => setOpen(null)}
         >
           <div
-            className="w-[480px] h-[520px] rounded-lg p-4 flex flex-col"
-            style={{ background: "var(--bg)", border: "1px solid var(--border)", borderTop: `3px solid ${openSpec.accent}` }}
+            className="glass bracket w-[500px] h-[540px] rounded-xl p-4 flex flex-col"
+            style={{ borderTop: `2px solid ${openSpec.accent}` }}
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="flex justify-between items-center mb-2">
-              <span className="font-semibold" style={{ color: openSpec.accent }}>
-                {openSpec.name} — private chat
-              </span>
-              <button onClick={() => setOpen(null)} className="text-xs" style={{ color: "var(--text-dim)" }}>
-                ✕ close
+            <div className="flex justify-between items-center mb-3">
+              <div className="flex items-center gap-2">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={`https://api.dicebear.com/9.x/bottts/svg?seed=${encodeURIComponent(openSpec.id)}&backgroundColor=0a1120`}
+                  alt={openSpec.name}
+                  width={30}
+                  height={30}
+                  className="rounded-full"
+                  style={{ boxShadow: `0 0 14px ${openSpec.accent}` }}
+                />
+                <span className="font-display text-xs font-bold glow-text" style={{ color: openSpec.accent }}>
+                  {openSpec.name.toUpperCase()} · SECURE CHANNEL
+                </span>
+              </div>
+              <button onClick={() => setOpen(null)} className="font-mono text-[11px]" style={{ color: "var(--text-dim)" }}>
+                ✕ CLOSE
               </button>
             </div>
             <div className="flex-1 min-h-0">
               <ChatPanel
                 endpoint={`/api/agent-chat/${openSpec.id}`}
                 accent={openSpec.accent}
-                placeholder={`Ask ${openSpec.name} anything in its area…`}
+                placeholder={`Open a private channel with ${openSpec.name}…`}
               />
             </div>
           </div>

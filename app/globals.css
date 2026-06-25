@@ -1,30 +1,105 @@
 @import "tailwindcss";
 
 :root {
-  --bg: #0a0a0f;
-  --surface: rgba(255, 255, 255, 0.04);
-  --border: rgba(255, 255, 255, 0.08);
-  --text: #e7e7ea;
-  --text-dim: #8a8a93;
+  --bg: #04070f;
+  --bg2: #0a1120;
+  --surface: rgba(20, 36, 64, 0.35);
+  --border: rgba(80, 180, 255, 0.18);
+  --text: #d6f0ff;
+  --text-dim: #6f88a8;
   --marketing: #00d4ff;
-  --growth: #00ff88;
-  --content: #ffaa00;
+  --growth: #00ff9d;
+  --content: #ffc24d;
+  --cyan: #38e8ff;
+  --danger: #ff3b6b;
 }
 
 @theme inline {
   --color-background: var(--bg);
   --color-foreground: var(--text);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --font-sans: var(--font-sans);
+  --font-mono: var(--font-mono);
 }
 
 body {
-  background: var(--bg);
+  background:
+    radial-gradient(1200px 700px at 80% -10%, rgba(0, 120, 200, 0.16), transparent 60%),
+    radial-gradient(900px 600px at 0% 110%, rgba(0, 255, 160, 0.08), transparent 55%),
+    linear-gradient(180deg, var(--bg), var(--bg2));
   color: var(--text);
-  font-family: var(--font-sans), Arial, Helvetica, sans-serif;
+  font-family: var(--font-sans), system-ui, sans-serif;
+  letter-spacing: 0.02em;
+  position: relative;
+  overflow-x: hidden;
 }
 
-@keyframes pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.35; }
+/* Animated holographic grid floor */
+.hud-grid {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  background-image:
+    linear-gradient(rgba(56, 232, 255, 0.06) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(56, 232, 255, 0.06) 1px, transparent 1px);
+  background-size: 44px 44px;
+  mask-image: radial-gradient(ellipse 90% 80% at 50% 30%, #000 40%, transparent 100%);
+  animation: gridDrift 24s linear infinite;
 }
+@keyframes gridDrift {
+  from { background-position: 0 0, 0 0; }
+  to { background-position: 44px 44px, 44px 44px; }
+}
+
+/* Faint moving scanline sweep */
+.hud-scanline {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  background: linear-gradient(180deg, transparent, rgba(56, 232, 255, 0.045) 50%, transparent);
+  height: 38%;
+  animation: scan 7s ease-in-out infinite;
+}
+@keyframes scan {
+  0%, 100% { transform: translateY(-40%); opacity: 0; }
+  50% { transform: translateY(220%); opacity: 1; }
+}
+
+main, .above { position: relative; z-index: 1; }
+
+/* Display / title font */
+.font-display { font-family: var(--font-display), var(--font-sans), sans-serif; letter-spacing: 0.14em; }
+
+/* Glass panel with neon edge + HUD corner brackets */
+.glass {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  box-shadow: 0 0 0 1px rgba(56, 232, 255, 0.04), 0 8px 40px rgba(0, 30, 60, 0.5), inset 0 0 30px rgba(0, 120, 200, 0.05);
+  position: relative;
+}
+.bracket::before, .bracket::after {
+  content: "";
+  position: absolute;
+  width: 14px; height: 14px;
+  border: 2px solid var(--cyan);
+  opacity: 0.55;
+}
+.bracket::before { top: -1px; left: -1px; border-right: none; border-bottom: none; }
+.bracket::after { bottom: -1px; right: -1px; border-left: none; border-top: none; }
+
+.glow-text { text-shadow: 0 0 12px currentColor; }
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.4; transform: scale(0.86); }
+}
+@keyframes ringspin {
+  to { transform: rotate(360deg); }
+}
+
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-thumb { background: rgba(56, 232, 255, 0.25); border-radius: 4px; }
+::-webkit-scrollbar-track { background: transparent; }

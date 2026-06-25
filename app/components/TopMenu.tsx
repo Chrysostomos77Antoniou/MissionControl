@@ -1,25 +1,49 @@
+"use client";
 import { QARunButton } from "./QARunButton";
 import { LogoutButton } from "./LogoutButton";
 import { InstallButton } from "./InstallButton";
+import type { View } from "./Shell";
 
-export function TopMenu() {
+export function TopMenu({ view, onNavigate }: { view: View; onNavigate: (v: View) => void }) {
+  const NavBtn = ({ to, label }: { to: View; label: string }) => (
+    <button
+      onClick={() => onNavigate(to)}
+      className="font-display text-[11px] px-3 py-1 rounded transition"
+      style={{
+        color: view === to ? "#04070f" : "var(--cyan)",
+        background: view === to ? "var(--cyan)" : "transparent",
+        border: "1px solid var(--border)",
+        boxShadow: view === to ? "0 0 14px var(--cyan)" : "none",
+      }}
+    >
+      {label}
+    </button>
+  );
+
   return (
-    <header className="flex justify-between items-center mb-4">
+    <header className="flex justify-between items-center mb-5 above">
       <div className="flex items-center gap-5">
-        <h1 className="font-bold tracking-wide">FOOTRANK MISSION CONTROL</h1>
-        <nav className="flex gap-4 text-xs">
-          <a href="/suggestions" target="_blank" rel="noreferrer" className="hover:underline" style={{ color: "var(--text-dim)" }}>
-            Inbox ↗
-          </a>
-          <a href="/logs" target="_blank" rel="noreferrer" className="hover:underline" style={{ color: "var(--text-dim)" }}>
-            Logs ↗
-          </a>
+        <div className="flex items-center gap-2">
+          <span
+            className="w-3 h-3 rounded-full"
+            style={{ background: "var(--growth)", boxShadow: "0 0 12px var(--growth)", animation: "pulse 2s infinite" }}
+          />
+          <h1 className="font-display font-black tracking-[0.2em] text-sm glow-text" style={{ color: "var(--cyan)" }}>
+            FOOTRANK · MISSION CONTROL
+          </h1>
+        </div>
+        <nav className="flex gap-2">
+          <NavBtn to="dashboard" label="DECK" />
+          <NavBtn to="inbox" label="INBOX" />
+          <NavBtn to="logs" label="LOGS" />
         </nav>
       </div>
-      <div className="flex items-center gap-4">
+      <div className="flex items-center gap-3">
         <InstallButton />
         <QARunButton />
-        <span className="text-xs" style={{ color: "var(--growth)" }}>● OPERATIONAL</span>
+        <span className="font-mono text-[10px]" style={{ color: "var(--growth)" }}>
+          ◉ SYSTEMS NOMINAL
+        </span>
         <LogoutButton />
       </div>
     </header>
