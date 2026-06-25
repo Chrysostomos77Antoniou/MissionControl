@@ -17,8 +17,9 @@ export async function runAgent(spec: AgentSpec): Promise<string> {
     system: spec.system,
     userMessage,
     tools: toolsFor(spec.id),
-    maxTurns: 18,
+    maxTurns: 12,
     model: SONNET, // lighter suggestion-generation runs on Sonnet
+    effort: "low", // minimal thinking — cheapest for routine scans
   });
   await writeMemory(spec.id, text.slice(0, 500));
   return text;

@@ -95,6 +95,7 @@ MODE: CODE FIX. Implement the change as actual code and submit_fix with the full
     tools: TOOLS,
     maxTurns: 14,
     model: OPUS, // code fixes / QA loop stay on Opus for correctness
+    effort: "medium", // balance correctness vs. cost (vs. the default high)
     dispatch,
   });
   return { text, committed };

@@ -16,9 +16,10 @@ export async function runAgentLoop(opts: {
   tools: Anthropic.Tool[];
   maxTurns?: number;
   model?: string;
+  effort?: "low" | "medium" | "high";
   dispatch?: (agent: AgentId, name: string, input: Record<string, unknown>) => Promise<string>;
 }): Promise<LoopOutput> {
-  const { agent, system, userMessage, tools, maxTurns = 8, model = OPUS, dispatch = dispatchTool } = opts;
+  const { agent, system, userMessage, tools, maxTurns = 8, model = OPUS, effort, dispatch = dispatchTool } = opts;
   const messages: Anthropic.MessageParam[] = [{ role: "user", content: userMessage }];
   const toolOutputs: string[] = [];
 
@@ -33,6 +34,11 @@ export async function runAgentLoop(opts: {
       model,
       max_tokens: 8000,
       thinking: { type: "adaptive" },
+      // Cache the (stable) system prompt + tool definitions so every turn in
+      // the loop — and repeat runs of the same agent — read them at ~10% cost.
+      cache_control: { type: "ephemeral" },
+      // Lower thinking effort on routine agents to cut token spend.
+      ...(effort ? { output_config: { effort } } : {}),
       system,
       tools,
       messages,
