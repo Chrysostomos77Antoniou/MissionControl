@@ -4,12 +4,18 @@ import type { Approval } from "../../lib/types";
 
 export function ApprovalCard({ approval, onResolve }: { approval: Approval; onResolve: () => void }) {
   const [reason, setReason] = useState("");
+  const [note, setNote] = useState("");
   const resolve = async (status: "approved" | "rejected") => {
-    await fetch(`/api/approvals/${approval.id}`, {
+    const res = await fetch(`/api/approvals/${approval.id}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ status, reason: status === "rejected" ? reason : undefined }),
     });
+    const data = (await res.json()) as { execution?: { ok: boolean; detail: string } | null };
+    if (data.execution && !data.execution.ok) {
+      setNote(`⚠ ${data.execution.detail}`);
+      return; // keep the card visible so the failure detail is readable
+    }
     onResolve();
   };
   return (
@@ -44,6 +50,11 @@ export function ApprovalCard({ approval, onResolve }: { approval: Approval; onRe
           style={{ background: "var(--bg)", border: "1px solid var(--border)" }}
         />
       </div>
+      {note && (
+        <div className="text-xs mt-2" style={{ color: "var(--content)" }}>
+          {note}
+        </div>
+      )}
     </div>
   );
 }

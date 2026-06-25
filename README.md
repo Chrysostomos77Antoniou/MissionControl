@@ -46,6 +46,16 @@ Vercel Cron invokes the path without a custom `Authorization` header. To keep th
 
 Single-user system for `tomisapoelcity@gmail.com`. Auth is **not yet enforced in code** — add Supabase Auth middleware gating every route to that email before deploying publicly.
 
-## v1 scope note
+## Actuators (what happens on approval)
 
-Approving an item marks it `approved` and logs it. Wiring the real platform API calls (Facebook/Instagram/TikTok/YouTube/Firebase/GitHub) on approval is the follow-up — the approval routes are the single integration point.
+Approving an item runs `executeApproval` (`lib/execute.ts`) and logs the result to the live feed:
+
+| Action | On approval | Needs |
+|---|---|---|
+| GitHub **issue** | Created via GitHub REST API | `GITHUB_TOKEN`, `GITHUB_REPO` (`owner/name`) |
+| GitHub **PR** | Not auto-created (needs a branch + diff) — create manually | — |
+| **Facebook** post | Published to the Page feed via Graph API | `FACEBOOK_ACCESS_TOKEN`, `FACEBOOK_PAGE_ID` |
+| **Push notification** | Sent via FCM to a topic derived from the audience (default `all`) | `FIREBASE_SERVICE_ACCOUNT` (JSON, one line); users subscribed to the topic |
+| **Instagram / TikTok / YouTube** | Not auto-posted — agents draft captions/scripts, not media files. Use the draft to post manually | — |
+
+If an actuator can't run (missing env or media-dependent platform), the approval still records as `approved` and the failure reason is shown on the card and logged. Wiring Instagram/TikTok/YouTube would require a media-generation or upload step — a future addition.
