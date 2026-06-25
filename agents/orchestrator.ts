@@ -1,6 +1,6 @@
 import { anthropic, MODEL } from "../lib/anthropic";
 
-export { runGroup, runOne } from "./run-agent";
+export { runGroup, runOne, runHandler } from "./run-agent";
 
 const ORCH_SYSTEM = `You are the orchestrator of FootRank Mission Control. You coordinate a team of advisory agents (Engineering, Developer, QA, Cybersecurity, UX/Design, Marketing, Growth, Data, Community & Trust/Safety, Competitive Intel, Monetization) that produce suggestions for the owner. When the owner messages you, answer status questions concisely and acknowledge directives clearly. Respond directly without preamble.`;
 

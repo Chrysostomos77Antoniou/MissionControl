@@ -20,10 +20,8 @@ export interface Suggestion {
   title: string;
   body: string;
   priority: "low" | "medium" | "high";
-  status: "new" | "done" | "dismissed" | "published";
-  publishable: boolean;
-  platform: string | null;
-  post_text: string | null;
+  status: "new" | "done" | "dismissed";
+  result: string | null;
   created_at: string;
 }
 

@@ -45,7 +45,17 @@ Next.js 15 (App Router) · TypeScript · `@anthropic-ai/sdk` (`claude-opus-4-8`)
 
 ## How suggestions flow
 
-Each agent runs its tool loop (`web_search`, `read_footrank_stats`, and for technical agents `list_repo`/`read_repo_file`), then calls `save_suggestion` for each recommendation. Suggestions land in the `suggestions` table and appear in the inbox with agent, category, and priority. You **Mark done** or **Dismiss**. Agents see their last 5 suggestions each run to avoid repeating themselves.
+Each agent runs its tool loop (`web_search`, `read_footrank_stats`, and for technical agents `list_repo`/`read_repo_file`), then calls `save_suggestion` for each recommendation. Suggestions land in the inbox with agent, category, and priority. Agents see their last 5 suggestions each run to avoid repeating themselves.
+
+Each suggestion has three buttons:
+
+- **Okay — agent handles it** → the responsible agent executes the suggestion: opens a **GitHub PR** with the actual fix for code tasks, or applies a **Supabase migration directly** for DB/security fixes. If it can't finish autonomously, it reports exactly what you must do. The result is shown on the card. *Clicking Okay is your approval — that's the human gate before any change.*
+- **Mark done** → archive it (you handled it).
+- **Dismiss** → drop it.
+
+**Setup for "Okay" to act:** `GITHUB_TOKEN` must have **write** access (for PRs) and `SUPABASE_DB_URL` must be set (Postgres connection URI, for DB migrations). Without them, Okay still runs the agent but it reports that it can't execute and tells you what to do manually. Strategy agents (Marketing, Growth, etc.) have no write tools — their "Okay" produces the concrete plan/deliverable.
+
+> ⚠️ Okay on a technical suggestion can change your live repo (a PR — you still merge) or your **live database** (a migration applied immediately, in a transaction). Review each suggestion before clicking Okay.
 
 ## Owner-only access
 

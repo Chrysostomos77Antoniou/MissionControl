@@ -7,18 +7,12 @@ export async function saveSuggestion(input: {
   title: string;
   body: string;
   priority: "low" | "medium" | "high";
-  publishable?: boolean;
-  platform?: string;
-  post_text?: string;
 }): Promise<void> {
-  await supabaseAdmin.from("suggestions").insert({
-    ...input,
-    publishable: input.publishable ?? false,
-  });
+  await supabaseAdmin.from("suggestions").insert(input);
 }
 
 export async function listSuggestions(
-  status: "new" | "done" | "dismissed" | "published" = "new",
+  status: "new" | "done" | "dismissed" = "new",
 ): Promise<Suggestion[]> {
   const { data } = await supabaseAdmin
     .from("suggestions")
@@ -33,9 +27,10 @@ export async function getSuggestion(id: string): Promise<Suggestion | null> {
   return (data as Suggestion) ?? null;
 }
 
-export async function updateSuggestion(
-  id: string,
-  status: "new" | "done" | "dismissed" | "published",
-): Promise<void> {
+export async function updateSuggestion(id: string, status: "new" | "done" | "dismissed"): Promise<void> {
   await supabaseAdmin.from("suggestions").update({ status }).eq("id", id);
+}
+
+export async function recordResult(id: string, result: string): Promise<void> {
+  await supabaseAdmin.from("suggestions").update({ result }).eq("id", id);
 }
