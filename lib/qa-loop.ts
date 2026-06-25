@@ -18,6 +18,9 @@ async function sleep(ms: number) {
 // Nothing goes live. Returns the new qa_status for the UI to start polling.
 export async function startHandling(s: Suggestion): Promise<{ qa_status: string; result: string }> {
   const branch = branchFor(s);
+  // Always start fresh from current master (so the branch has the latest test
+  // workflow + suite); a leftover branch from a prior run would be stale.
+  await deleteBranch(branch);
   const { text, committed } = await runFixAgent(s, branch, null);
 
   if (!committed) {
