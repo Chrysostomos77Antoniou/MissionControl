@@ -1,0 +1,52 @@
+import type Anthropic from "@anthropic-ai/sdk";
+import { anthropic, MODEL } from "../lib/anthropic";
+import { TOOL_DEFS, dispatchTool } from "../tools/registry";
+import { logActivity } from "../lib/memory";
+import type { AgentId } from "../lib/types";
+
+export async function runAgentLoop(opts: {
+  agent: AgentId;
+  system: string;
+  userMessage: string;
+  maxTurns?: number;
+}): Promise<string> {
+  const { agent, system, userMessage, maxTurns = 6 } = opts;
+  const messages: Anthropic.MessageParam[] = [{ role: "user", content: userMessage }];
+
+  const finalText = (content: Anthropic.ContentBlock[]) =>
+    content
+      .filter((b): b is Anthropic.TextBlock => b.type === "text")
+      .map((b) => b.text)
+      .join("\n");
+
+  for (let turn = 0; turn < maxTurns; turn++) {
+    const response = await anthropic.messages.create({
+      model: MODEL,
+      max_tokens: 8000,
+      thinking: { type: "adaptive" },
+      system,
+      tools: TOOL_DEFS,
+      messages,
+    });
+
+    if (response.stop_reason === "end_turn") {
+      return finalText(response.content);
+    }
+
+    messages.push({ role: "assistant", content: response.content });
+
+    const toolResults: Anthropic.ToolResultBlockParam[] = [];
+    for (const block of response.content) {
+      if (block.type === "tool_use") {
+        await logActivity(agent, `tool:${block.name}`, JSON.stringify(block.input).slice(0, 300));
+        const result = await dispatchTool(agent, block.name, block.input as Record<string, unknown>);
+        toolResults.push({ type: "tool_result", tool_use_id: block.id, content: result });
+      }
+    }
+    if (toolResults.length === 0) {
+      return finalText(response.content);
+    }
+    messages.push({ role: "user", content: toolResults });
+  }
+  return "Reached max turns.";
+}
