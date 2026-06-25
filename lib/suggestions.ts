@@ -31,6 +31,11 @@ export async function updateSuggestion(id: string, status: "new" | "done" | "dis
   await supabaseAdmin.from("suggestions").update({ status }).eq("id", id);
 }
 
-export async function recordResult(id: string, result: string, pr_url?: string | null): Promise<void> {
-  await supabaseAdmin.from("suggestions").update({ result, pr_url: pr_url ?? null }).eq("id", id);
+export async function recordResult(
+  id: string,
+  result: string,
+  pr_url: string | null,
+  outcome: "fixed" | "action_needed",
+): Promise<void> {
+  await supabaseAdmin.from("suggestions").update({ result, pr_url, outcome }).eq("id", id);
 }

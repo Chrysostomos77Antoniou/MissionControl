@@ -6,11 +6,14 @@ import type { Suggestion } from "../../lib/types";
 const PRIORITY: Record<string, string> = { high: "#ff4d6d", medium: "#ffaa00", low: "#8a8a93" };
 const BLUE = "#3b82f6";
 const RED = "#e5484d";
+const ORANGE = "#ffaa00";
+const GREEN = "#00ff88";
 
 export function SuggestionCard({ s, onResolve }: { s: Suggestion; onResolve: () => void }) {
   const accent = AGENT_BY_ID[s.agent]?.accent ?? "var(--text-dim)";
   const [busy, setBusy] = useState<null | "handle" | "finalize">(null);
   const [result, setResult] = useState<string | null>(s.result);
+  const [outcome, setOutcome] = useState<"fixed" | "action_needed" | null>(s.outcome);
   const [handled, setHandled] = useState<boolean>(!!s.result);
   const [note, setNote] = useState("");
 
@@ -27,9 +30,10 @@ export function SuggestionCard({ s, onResolve }: { s: Suggestion; onResolve: () 
     setBusy("handle");
     setNote("");
     const res = await fetch(`/api/suggestions/${s.id}/handle`, { method: "POST" });
-    const data = (await res.json()) as { result: string };
+    const data = (await res.json()) as { result: string; outcome: "fixed" | "action_needed" };
     setBusy(null);
     setResult(data.result);
+    setOutcome(data.outcome);
     setHandled(true);
   };
 
@@ -39,9 +43,11 @@ export function SuggestionCard({ s, onResolve }: { s: Suggestion; onResolve: () 
     const res = await fetch(`/api/suggestions/${s.id}/finalize`, { method: "POST" });
     const data = (await res.json()) as { ok: boolean; detail: string };
     setBusy(null);
-    if (data.ok) onResolve(); // task disappears
+    if (data.ok) onResolve();
     else setNote(`⚠ ${data.detail}`);
   };
+
+  const fixed = outcome === "fixed";
 
   return (
     <div
@@ -70,10 +76,10 @@ export function SuggestionCard({ s, onResolve }: { s: Suggestion; onResolve: () 
         <button
           onClick={() => act("done")}
           disabled={busy !== null}
-          className="px-3 py-1 rounded text-xs"
-          style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--text-dim)" }}
+          className="px-3 py-1 rounded text-xs font-semibold"
+          style={{ background: ORANGE, color: "#000" }}
         >
-          Mark done
+          Done
         </button>
         <button
           onClick={() => act("dismissed")}
@@ -87,15 +93,29 @@ export function SuggestionCard({ s, onResolve }: { s: Suggestion; onResolve: () 
 
       {result && (
         <div
-          className="text-xs mt-3 p-2 rounded whitespace-pre-wrap"
+          className="text-xs mt-3 p-3 rounded whitespace-pre-wrap"
           style={{ background: "var(--bg)", border: "1px solid var(--border)", color: "var(--text)" }}
         >
-          <div className="font-semibold mb-1" style={{ color: accent }}>
+          <div className="font-semibold mb-2" style={{ color: accent }}>
             Agent result
           </div>
-          {result}
+
+          {outcome && (
+            <div
+              className="text-base font-bold mb-2 px-2 py-1 rounded inline-block"
+              style={{
+                color: fixed ? "#000" : "#000",
+                background: fixed ? GREEN : ORANGE,
+              }}
+            >
+              {fixed ? "✓ FIXED BY AGENT" : "⚠ ACTION NEEDED FROM YOU"}
+            </div>
+          )}
+
+          <div>{result}</div>
+
           {s.pr_url && (
-            <div className="mt-1">
+            <div className="mt-2">
               <a href={s.pr_url} target="_blank" rel="noreferrer" style={{ color: BLUE }}>
                 {s.pr_url}
               </a>
@@ -104,13 +124,13 @@ export function SuggestionCard({ s, onResolve }: { s: Suggestion; onResolve: () 
         </div>
       )}
 
-      {handled && (
+      {handled && fixed && (
         <div className="mt-3">
           <button
             onClick={finalize}
             disabled={busy !== null}
             className="px-4 py-1 rounded text-xs font-semibold"
-            style={{ background: "var(--growth)", color: "#000" }}
+            style={{ background: GREEN, color: "#000" }}
           >
             {busy === "finalize" ? "Committing & testing…" : "🚀 Commit, push & test"}
           </button>

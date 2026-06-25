@@ -38,9 +38,15 @@ export async function runOne(id: AgentId): Promise<string> {
   return runAgent(AGENT_BY_ID[id]);
 }
 
+export interface HandleOutput {
+  result: string;
+  outcome: "fixed" | "action_needed";
+  pr_url: string | null;
+}
+
 // The owner clicked "Okay" — the responsible agent now EXECUTES the suggestion
 // (opens a PR / applies a DB migration) or reports what the owner must do.
-export async function runHandler(s: Suggestion): Promise<string> {
+export async function runHandler(s: Suggestion): Promise<HandleOutput> {
   const spec = AGENT_BY_ID[s.agent];
   const system = `${spec.system}
 
@@ -68,7 +74,12 @@ Execute it now.`;
   // Capture the opened PR URL deterministically from the tool output.
   const prLine = toolOutputs.find((o) => o.startsWith("Opened PR: "));
   const prUrl = prLine ? prLine.replace("Opened PR: ", "").trim() : null;
-  await recordResult(s.id, text, prUrl);
-  await logActivity(s.agent, "handled", s.title.slice(0, 120));
-  return text;
+
+  // Did the agent actually execute something, or does the owner need to act?
+  const migrationApplied = toolOutputs.some((o) => o.includes("applied successfully"));
+  const outcome: "fixed" | "action_needed" = prUrl || migrationApplied ? "fixed" : "action_needed";
+
+  await recordResult(s.id, text, prUrl, outcome);
+  await logActivity(s.agent, outcome === "fixed" ? "handled:fixed" : "handled:needs-owner", s.title.slice(0, 120));
+  return { result: text, outcome, pr_url: prUrl };
 }

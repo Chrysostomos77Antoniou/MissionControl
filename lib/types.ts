@@ -23,6 +23,7 @@ export interface Suggestion {
   status: "new" | "done" | "dismissed";
   result: string | null;
   pr_url: string | null;
+  outcome: "fixed" | "action_needed" | null;
   created_at: string;
 }
 

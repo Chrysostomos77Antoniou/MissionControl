@@ -10,6 +10,6 @@ export async function POST(_req: NextRequest, { params }: { params: Promise<{ id
   const { id } = await params;
   const s = await getSuggestion(id);
   if (!s) return NextResponse.json({ result: "Suggestion not found." }, { status: 404 });
-  const result = await runHandler(s);
-  return NextResponse.json({ result });
+  const out = await runHandler(s);
+  return NextResponse.json(out);
 }
