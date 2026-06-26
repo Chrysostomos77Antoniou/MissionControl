@@ -46,8 +46,9 @@ export function RoomsDashboard() {
           style={{
             gridRow: "2 / 4",
             gridColumn: "2 / 4",
-            borderColor: "rgba(91,157,255,0.22)",
-            background: "linear-gradient(180deg, rgba(91,157,255,0.05), var(--surface))",
+            borderColor: "rgba(255,174,59,0.28)",
+            background: "linear-gradient(180deg, rgba(255,150,40,0.06), var(--surface))",
+            boxShadow: "0 0 50px -18px rgba(255,150,40,0.4)",
           }}
         >
           <div className="flex items-center gap-3 mb-4 pb-4" style={{ borderBottom: "1px solid var(--border)" }}>

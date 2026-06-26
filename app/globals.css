@@ -1,18 +1,19 @@
 @import "tailwindcss";
 
 :root {
-  --bg: #0a0c11;
-  --bg2: #0e1219;
-  --surface: rgba(255, 255, 255, 0.025);
-  --surface-2: rgba(255, 255, 255, 0.05);
-  --border: rgba(255, 255, 255, 0.09);
-  --text: #e7eaf0;
-  --text-dim: #8a92a4;
-  --cyan: #5b9dff;
-  --marketing: #5b9dff;
-  --growth: #3ddc97;
-  --content: #f0b54a;
-  --danger: #f0526b;
+  --bg: #070707;
+  --bg2: #0c0a07;
+  --surface: rgba(255, 255, 255, 0.022);
+  --surface-2: rgba(255, 180, 80, 0.05);
+  --border: rgba(255, 180, 90, 0.12);
+  --text: #efe9e1;
+  --text-dim: #8c8378;
+  --amber: #ffae3b;
+  --cyan: #ffae3b;       /* primary repointed to amber */
+  --marketing: #ffae3b;
+  --growth: #ffd23f;     /* "ready" reads as gold on black */
+  --content: #ff8a1f;
+  --danger: #ff5a4d;
 }
 
 @theme inline {
@@ -24,22 +25,22 @@
 
 body {
   background:
-    radial-gradient(1000px 600px at 85% -15%, rgba(60, 110, 200, 0.08), transparent 60%),
+    radial-gradient(900px 520px at 85% -12%, rgba(255, 150, 40, 0.10), transparent 60%),
+    radial-gradient(700px 500px at 5% 110%, rgba(255, 120, 20, 0.05), transparent 55%),
     linear-gradient(180deg, var(--bg), var(--bg2));
   color: var(--text);
   font-family: var(--font-sans), system-ui, sans-serif;
   position: relative;
 }
 
-/* Very faint structural grid — texture, not decoration */
 .hud-grid {
   position: fixed;
   inset: 0;
   pointer-events: none;
   z-index: 0;
   background-image:
-    linear-gradient(rgba(255, 255, 255, 0.014) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(255, 255, 255, 0.014) 1px, transparent 1px);
+    linear-gradient(rgba(255, 180, 90, 0.018) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 180, 90, 0.018) 1px, transparent 1px);
   background-size: 48px 48px;
   mask-image: radial-gradient(ellipse 100% 90% at 50% 20%, #000 50%, transparent 100%);
 }
@@ -47,35 +48,45 @@ body {
 
 main, .above { position: relative; z-index: 1; }
 
-/* Refined label/heading style — clean sans with measured tracking */
 .font-display {
   font-family: var(--font-sans), system-ui, sans-serif;
   font-weight: 600;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.06em;
 }
 
-/* Quiet glass surface */
 .glass {
   background: var(--surface);
   border: 1px solid var(--border);
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
-  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.03) inset, 0 6px 24px rgba(0, 0, 0, 0.35);
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.03) inset, 0 6px 24px rgba(0, 0, 0, 0.5);
 }
-.glass:hover { border-color: rgba(255, 255, 255, 0.14); }
 
-/* Brackets removed for a cleaner look (class kept as a no-op) */
 .bracket::before, .bracket::after { content: none; }
-
 .glow-text { text-shadow: none; }
 
-@keyframes pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.45; }
+button { transition: background-color .15s ease, color .15s ease, box-shadow .15s ease, transform .1s ease, opacity .15s ease; }
+
+/* Animated agent rooms */
+.agent-room { transition: transform .22s cubic-bezier(.2,.7,.2,1), box-shadow .22s ease, border-color .22s ease, background-color .22s ease; }
+.agent-room:hover {
+  transform: translateY(-5px) scale(1.035);
+  border-color: var(--acc);
+  background-color: rgba(255, 180, 90, 0.04);
+  box-shadow: 0 14px 38px -12px var(--acc), 0 0 0 1px color-mix(in srgb, var(--acc) 40%, transparent) inset;
 }
+.agent-room .mono { transition: transform .22s cubic-bezier(.2,.7,.2,1); }
+.agent-room:hover .mono { transform: scale(1.1) rotate(-2deg); }
+.agent-room .acc-bar {
+  height: 2px; width: 22px; border-radius: 2px; margin-top: 2px;
+  background: var(--acc); opacity: .5; transition: width .22s ease, opacity .22s ease;
+}
+.agent-room:hover .acc-bar { width: 60%; opacity: 1; }
+
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
 @keyframes ringspin { to { transform: rotate(360deg); } }
 
 ::-webkit-scrollbar { width: 8px; height: 8px; }
-::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.12); border-radius: 4px; }
-::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.2); }
+::-webkit-scrollbar-thumb { background: rgba(255, 180, 90, 0.18); border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(255, 180, 90, 0.3); }
 ::-webkit-scrollbar-track { background: transparent; }
