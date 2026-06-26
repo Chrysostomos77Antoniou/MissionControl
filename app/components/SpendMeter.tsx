@@ -39,7 +39,7 @@ export function SpendMeter() {
           {fmt(s.remaining)} left
         </span>
       ) : (
-        <span style={{ color: "var(--text-dim)" }}>set budget</span>
+        <span style={{ color: "var(--growth)" }}>no cap</span>
       )}
       <span style={{ color: "var(--text-dim)" }}>·</span>
       <span style={{ color: "var(--content)" }}>spent {fmt(s.total)}</span>
