@@ -7,7 +7,7 @@ import { withinBudget } from "./usage";
 import { AGENT_BY_ID } from "../agents/registry";
 import type { Suggestion } from "./types";
 
-const MAX_ATTEMPTS = 3;
+const MAX_ATTEMPTS = 2; // cap re-fix retries to limit cost per task
 
 function branchFor(s: Suggestion): string {
   return `qa/s-${s.id.slice(0, 8)}`;

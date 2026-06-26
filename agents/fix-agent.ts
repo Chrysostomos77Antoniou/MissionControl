@@ -1,6 +1,6 @@
 import type Anthropic from "@anthropic-ai/sdk";
 import { runAgentLoop } from "./run-loop";
-import { OPUS } from "../lib/anthropic";
+import { SONNET } from "../lib/anthropic";
 import { AGENT_BY_ID } from "./registry";
 import { webSearch } from "../tools/web-search";
 import { listRepo, readRepoFile } from "../tools/github-read";
@@ -93,9 +93,9 @@ MODE: CODE FIX. Implement the change as actual code and submit_fix with the full
     system,
     userMessage,
     tools: TOOLS,
-    maxTurns: 14,
-    model: OPUS, // code fixes / QA loop stay on Opus for correctness
-    effort: "medium", // balance correctness vs. cost (vs. the default high)
+    maxTurns: 10,
+    model: SONNET, // fixes run on Sonnet to keep cost down (Opus was ~2x)
+    effort: "low",
     dispatch,
   });
   return { text, committed };
