@@ -4,6 +4,7 @@ import { OPUS } from "../lib/anthropic";
 import { AGENT_BY_ID } from "./registry";
 import { webSearch } from "../tools/web-search";
 import { listRepo, readRepoFile } from "../tools/github-read";
+import { dbRead } from "../tools/db-read";
 import { commitToBranch } from "../tools/github-ci";
 import type { AgentId, Suggestion } from "../lib/types";
 
@@ -22,6 +23,12 @@ const TOOLS: Anthropic.Tool[] = [
     name: "web_search",
     description: "Search the web (APIs, deprecations, errors) when needed.",
     input_schema: { type: "object", properties: { query: { type: "string" } }, required: ["query"] },
+  },
+  {
+    name: "db_read",
+    description:
+      "READ-ONLY SQL against the live Supabase DB to verify real state (pg_policies, storage.buckets, information_schema) BEFORE writing a migration — so you never recreate a policy/table that already exists. SELECT/WITH only.",
+    input_schema: { type: "object", properties: { sql: { type: "string" } }, required: ["sql"] },
   },
   {
     name: "submit_fix",
@@ -69,6 +76,8 @@ export async function runFixAgent(
         return readRepoFile(String(input.path));
       case "web_search":
         return webSearch(String(input.query));
+      case "db_read":
+        return dbRead(String(input.sql));
       case "submit_fix": {
         const files = (input.files as { path: string; content: string }[]) ?? [];
         const res = await commitToBranch(branch, `mc: ${s.title.slice(0, 60)}`, files);

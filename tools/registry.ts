@@ -3,6 +3,7 @@ import type { AgentId } from "../lib/types";
 import { webSearch } from "./web-search";
 import { readFootrankStats } from "./supabase-read";
 import { listRepo, readRepoFile } from "./github-read";
+import { dbRead } from "./db-read";
 import { openPr } from "./github-write";
 import { applyMigration } from "./db-migrate";
 import { saveSuggestion } from "../lib/suggestions";
@@ -16,7 +17,8 @@ type ToolName =
   | "read_repo_file"
   | "save_suggestion"
   | "open_github_pr"
-  | "apply_db_migration";
+  | "apply_db_migration"
+  | "db_read";
 
 const ALL_TOOLS: Record<ToolName, Anthropic.Tool> = {
   web_search: {
@@ -30,6 +32,12 @@ const ALL_TOOLS: Record<ToolName, Anthropic.Tool> = {
     description:
       "Read live FootRank usage data (signups, matches, teams, behavior reports, notifications). Use to ground work in real numbers.",
     input_schema: { type: "object", properties: {} },
+  },
+  db_read: {
+    name: "db_read",
+    description:
+      "Run a READ-ONLY SQL query against the LIVE FootRank Supabase database to verify the real state — RLS policies (select * from pg_policies), tables/columns (information_schema.columns), storage buckets/policies (select * from storage.buckets), settings. ALWAYS use this to confirm whether something already exists before suggesting it; the repo does NOT contain the live database config. SELECT/WITH only.",
+    input_schema: { type: "object", properties: { sql: { type: "string" } }, required: ["sql"] },
   },
   list_repo: {
     name: "list_repo",
@@ -95,8 +103,8 @@ const ALL_TOOLS: Record<ToolName, Anthropic.Tool> = {
   },
 };
 
-const BASE: ToolName[] = ["web_search", "read_footrank_stats", "save_suggestion"];
-const BASE_CODE: ToolName[] = ["web_search", "read_footrank_stats", "list_repo", "read_repo_file", "save_suggestion"];
+const BASE: ToolName[] = ["web_search", "read_footrank_stats", "db_read", "save_suggestion"];
+const BASE_CODE: ToolName[] = ["web_search", "read_footrank_stats", "db_read", "list_repo", "read_repo_file", "save_suggestion"];
 
 const TECHNICAL: AgentId[] = ["cybersecurity", "engineering", "developer", "qa", "uxdesign", "devops"];
 const isTechnical = (a: AgentId) => TECHNICAL.includes(a);
@@ -125,6 +133,8 @@ export async function dispatchTool(
       return webSearch(String(input.query));
     case "read_footrank_stats":
       return readFootrankStats();
+    case "db_read":
+      return dbRead(String(input.sql));
     case "list_repo":
       return listRepo(String(input.path ?? ""));
     case "read_repo_file":
