@@ -2,6 +2,9 @@ import { runFixAgent } from "../agents/fix-agent";
 import { updateQa, getSuggestion } from "./suggestions";
 import { logActivity } from "./memory";
 import { latestRunId, runStatus, runFailureSummary, mergeBranch, deleteBranch } from "../tools/github-ci";
+import { notify } from "./notify";
+import { withinBudget } from "./usage";
+import { AGENT_BY_ID } from "../agents/registry";
 import type { Suggestion } from "./types";
 
 const MAX_ATTEMPTS = 3;
@@ -17,6 +20,10 @@ async function sleep(ms: number) {
 // Okay → agent prepares the fix on a QA branch (triggers the emulator suite).
 // Nothing goes live. Returns the new qa_status for the UI to start polling.
 export async function startHandling(s: Suggestion): Promise<{ qa_status: string; result: string }> {
+  const budget = await withinBudget();
+  if (!budget.ok) {
+    return { qa_status: "needs_owner", result: `⚠ Budget guard: ${budget.detail}` };
+  }
   const branch = branchFor(s);
   // Always start fresh from current master (so the branch has the latest test
   // workflow + suite); a leftover branch from a prior run would be stale.
@@ -64,6 +71,7 @@ export async function tick(s: Suggestion): Promise<{ qa_status: string; qa_log?:
   if (conclusion === "success") {
     await updateQa(s.id, { qa_status: "passed", qa_run_id: runId });
     await logActivity(s.agent, "qa:passed", branch);
+    await notify(`✅ ${AGENT_BY_ID[s.agent]?.name ?? s.agent}: "${s.title}" passed QA — ready to push live.`);
     return { qa_status: "passed" };
   }
 
@@ -73,6 +81,7 @@ export async function tick(s: Suggestion): Promise<{ qa_status: string; qa_log?:
   if (attempts >= MAX_ATTEMPTS) {
     await updateQa(s.id, { qa_status: "needs_owner", qa_log: failure });
     await logActivity(s.agent, "qa:gave-up", `${branch} after ${attempts} attempts`);
+    await notify(`⚠ ${AGENT_BY_ID[s.agent]?.name ?? s.agent}: "${s.title}" couldn't pass QA after ${attempts} tries — needs you.`);
     return { qa_status: "needs_owner", qa_log: failure };
   }
 

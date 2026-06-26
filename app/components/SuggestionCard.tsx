@@ -18,7 +18,17 @@ export function SuggestionCard({ s, onResolve }: { s: Suggestion; onResolve: () 
   const [qa, setQa] = useState<QaStatus>(s.qa_status);
   const [qaLog, setQaLog] = useState<string | null>(s.qa_log);
   const [note, setNote] = useState("");
+  const [diff, setDiff] = useState<{ filename: string; additions: number; deletions: number; patch: string }[] | null>(null);
+  const [showDiff, setShowDiff] = useState(false);
   const polling = useRef(false);
+
+  const loadDiff = async () => {
+    setShowDiff((v) => !v);
+    if (diff) return;
+    const r = await fetch(`/api/suggestions/${s.id}/diff`);
+    const d = (await r.json()) as { files: typeof diff };
+    setDiff(d.files ?? []);
+  };
 
   const poll = useCallback(async () => {
     if (polling.current) return;
@@ -146,6 +156,13 @@ export function SuggestionCard({ s, onResolve }: { s: Suggestion; onResolve: () 
       {qa === "passed" && (
         <div className="mt-3">
           <button
+            onClick={loadDiff}
+            className="px-3 py-1 mr-2 rounded text-xs"
+            style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--cyan)" }}
+          >
+            {showDiff ? "▾ Hide diff" : "▸ View diff"}
+          </button>
+          <button
             onClick={pushLive}
             disabled={busy !== null}
             className="px-4 py-1 rounded text-xs font-semibold"
@@ -153,6 +170,32 @@ export function SuggestionCard({ s, onResolve }: { s: Suggestion; onResolve: () 
           >
             {busy === "finalize" ? "Pushing live…" : "🚀 Push live (merge to master)"}
           </button>
+          {showDiff && (
+            <div className="mt-2 text-[10px] font-mono rounded p-2 max-h-72 overflow-y-auto" style={{ background: "#04070f", border: "1px solid var(--border)" }}>
+              {diff === null && <div style={{ color: "var(--text-dim)" }}>Loading diff…</div>}
+              {diff?.length === 0 && <div style={{ color: "var(--text-dim)" }}>No changes found.</div>}
+              {diff?.map((f) => (
+                <div key={f.filename} className="mb-3">
+                  <div style={{ color: "var(--cyan)" }}>
+                    {f.filename} <span style={{ color: "var(--growth)" }}>+{f.additions}</span>{" "}
+                    <span style={{ color: "var(--danger)" }}>-{f.deletions}</span>
+                  </div>
+                  <pre className="whitespace-pre-wrap">
+                    {f.patch.split("\n").map((line, i) => (
+                      <div
+                        key={i}
+                        style={{
+                          color: line.startsWith("+") ? "#6ee7a8" : line.startsWith("-") ? "#ff8aa8" : "var(--text-dim)",
+                        }}
+                      >
+                        {line}
+                      </div>
+                    ))}
+                  </pre>
+                </div>
+              ))}
+            </div>
+          )}
           {note && (
             <div className="text-xs mt-2" style={{ color: "var(--content)" }}>
               {note}

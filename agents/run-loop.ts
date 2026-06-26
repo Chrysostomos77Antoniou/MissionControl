@@ -1,6 +1,7 @@
 import type Anthropic from "@anthropic-ai/sdk";
 import { anthropic, OPUS } from "../lib/anthropic";
 import { dispatchTool } from "../tools/registry";
+import { recordUsage } from "../lib/usage";
 import { logActivity } from "../lib/memory";
 import type { AgentId } from "../lib/types";
 
@@ -43,6 +44,7 @@ export async function runAgentLoop(opts: {
       tools,
       messages,
     });
+    await recordUsage(model, response.usage);
 
     if (response.stop_reason === "end_turn") return { text: finalText(response.content), toolOutputs };
 

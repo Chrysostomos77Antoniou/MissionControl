@@ -2,6 +2,7 @@
 import { QARunButton } from "./QARunButton";
 import { LogoutButton } from "./LogoutButton";
 import { InstallButton } from "./InstallButton";
+import { SpendMeter } from "./SpendMeter";
 import type { View } from "./Shell";
 
 export function TopMenu({ view, onNavigate }: { view: View; onNavigate: (v: View) => void }) {
@@ -39,11 +40,9 @@ export function TopMenu({ view, onNavigate }: { view: View; onNavigate: (v: View
         </nav>
       </div>
       <div className="flex items-center gap-3">
+        <SpendMeter />
         <InstallButton />
         <QARunButton />
-        <span className="font-mono text-[10px]" style={{ color: "var(--growth)" }}>
-          ◉ SYSTEMS NOMINAL
-        </span>
         <LogoutButton />
       </div>
     </header>

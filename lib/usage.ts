@@ -1,0 +1,76 @@
+import { supabaseAdmin } from "./supabase";
+
+// Price per 1M tokens: [input, output].
+const PRICE: Record<string, [number, number]> = {
+  "claude-opus-4-8": [5, 25],
+  "claude-sonnet-4-6": [3, 15],
+  "claude-haiku-4-5": [1, 5],
+};
+
+interface Usage {
+  input_tokens?: number;
+  output_tokens?: number;
+  cache_read_input_tokens?: number | null;
+  cache_creation_input_tokens?: number | null;
+}
+
+export async function recordUsage(model: string, usage: Usage | undefined): Promise<void> {
+  if (!usage) return;
+  const [pin, pout] = PRICE[model] ?? [5, 25];
+  const input = usage.input_tokens ?? 0;
+  const output = usage.output_tokens ?? 0;
+  const cacheRead = usage.cache_read_input_tokens ?? 0;
+  const cacheWrite = usage.cache_creation_input_tokens ?? 0;
+  const cost =
+    (input * pin + output * pout + cacheRead * pin * 0.1 + cacheWrite * pin * 1.25) / 1_000_000;
+  await supabaseAdmin.from("usage_log").insert({
+    model,
+    input_tokens: input,
+    output_tokens: output,
+    cache_read: cacheRead,
+    cache_write: cacheWrite,
+    cost,
+  });
+}
+
+export interface SpendSummary {
+  today: number;
+  total: number;
+  budget: number | null;
+  remaining: number | null;
+  dailyCap: number | null;
+}
+
+export async function spendSummary(): Promise<SpendSummary> {
+  const startOfDay = new Date();
+  startOfDay.setHours(0, 0, 0, 0);
+  const [all, todayRows] = await Promise.all([
+    supabaseAdmin.from("usage_log").select("cost"),
+    supabaseAdmin.from("usage_log").select("cost").gte("created_at", startOfDay.toISOString()),
+  ]);
+  const sum = (rows: { cost: number }[] | null) => (rows ?? []).reduce((a, r) => a + Number(r.cost), 0);
+  const total = sum(all.data as { cost: number }[] | null);
+  const today = sum(todayRows.data as { cost: number }[] | null);
+  const budget = process.env.ANTHROPIC_BUDGET ? Number(process.env.ANTHROPIC_BUDGET) : null;
+  const dailyCap = process.env.ANTHROPIC_DAILY_CAP ? Number(process.env.ANTHROPIC_DAILY_CAP) : null;
+  return {
+    today,
+    total,
+    budget,
+    remaining: budget !== null ? Math.max(0, budget - total) : null,
+    dailyCap,
+  };
+}
+
+// Budget guard: true means agents may run. Stops spend once the daily cap or
+// total budget is reached.
+export async function withinBudget(): Promise<{ ok: boolean; detail: string }> {
+  const s = await spendSummary();
+  if (s.budget !== null && s.total >= s.budget) {
+    return { ok: false, detail: `Total budget of $${s.budget.toFixed(2)} reached — top up and raise ANTHROPIC_BUDGET.` };
+  }
+  if (s.dailyCap !== null && s.today >= s.dailyCap) {
+    return { ok: false, detail: `Daily cap of $${s.dailyCap.toFixed(2)} reached — resets at midnight.` };
+  }
+  return { ok: true, detail: "" };
+}

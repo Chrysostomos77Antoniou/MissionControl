@@ -111,6 +111,27 @@ export async function mergeBranch(branch: string, base = "master"): Promise<{ ok
   return { ok: false, detail: `merge ${res.status}: ${(await res.text()).slice(0, 150)}` };
 }
 
+export interface DiffFile {
+  filename: string;
+  additions: number;
+  deletions: number;
+  patch: string;
+}
+
+export async function getDiff(branch: string, base = "master"): Promise<DiffFile[]> {
+  const { repo, token } = env();
+  if (!repo || !token) return [];
+  const res = await fetch(`${API}/repos/${repo}/compare/${base}...${branch}`, { headers: h(token) });
+  if (!res.ok) return [];
+  const data = (await res.json()) as { files?: DiffFile[] };
+  return (data.files ?? []).map((f) => ({
+    filename: f.filename,
+    additions: f.additions,
+    deletions: f.deletions,
+    patch: (f.patch ?? "").slice(0, 6000),
+  }));
+}
+
 export async function deleteBranch(branch: string): Promise<void> {
   const { repo, token } = env();
   if (!repo || !token) return;

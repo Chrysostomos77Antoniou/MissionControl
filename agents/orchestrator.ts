@@ -1,6 +1,7 @@
 import { anthropic, HAIKU } from "../lib/anthropic";
 import { AGENT_BY_ID } from "./registry";
 import { getOrchestratorBriefing } from "../lib/briefing";
+import { recordUsage } from "../lib/usage";
 import type { AgentId } from "../lib/types";
 
 export { runGroup, runOne, runHandler } from "./run-agent";
@@ -18,7 +19,8 @@ function stream(system: string, message: string): ReadableStream {
     async start(controller) {
       try {
         s.on("text", (d) => controller.enqueue(encoder.encode(d)));
-        await s.finalMessage();
+        const msg = await s.finalMessage();
+        await recordUsage(HAIKU, msg.usage);
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
         const friendly = /credit balance/i.test(msg)

@@ -6,6 +6,8 @@ import { listRepo, readRepoFile } from "./github-read";
 import { openPr } from "./github-write";
 import { applyMigration } from "./db-migrate";
 import { saveSuggestion } from "../lib/suggestions";
+import { notify } from "../lib/notify";
+import { AGENT_BY_ID } from "../agents/registry";
 
 type ToolName =
   | "web_search"
@@ -127,17 +129,22 @@ export async function dispatchTool(
       return listRepo(String(input.path ?? ""));
     case "read_repo_file":
       return readRepoFile(String(input.path));
-    case "save_suggestion":
+    case "save_suggestion": {
+      const priority = (["low", "medium", "high"].includes(String(input.priority))
+        ? String(input.priority)
+        : "medium") as "low" | "medium" | "high";
       await saveSuggestion({
         agent,
         category: String(input.category ?? "general"),
         title: String(input.title),
         body: String(input.body),
-        priority: (["low", "medium", "high"].includes(String(input.priority))
-          ? String(input.priority)
-          : "medium") as "low" | "medium" | "high",
+        priority,
       });
+      if (priority === "high") {
+        await notify(`🔴 ${AGENT_BY_ID[agent]?.name ?? agent} flagged (high): ${String(input.title)}`);
+      }
       return "Saved to the owner's suggestions inbox.";
+    }
     case "open_github_pr":
       return openPr(input as Parameters<typeof openPr>[0]);
     case "apply_db_migration":

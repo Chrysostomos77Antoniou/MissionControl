@@ -4,6 +4,7 @@ import { AGENTS, AGENT_BY_ID, type AgentSpec } from "./registry";
 import { toolsFor, handlerToolsFor } from "../tools/registry";
 import { recentMemory, writeMemory, logActivity } from "../lib/memory";
 import { recordResult } from "../lib/suggestions";
+import { withinBudget } from "../lib/usage";
 import type { AgentId, Cadence, Suggestion } from "../lib/types";
 
 export async function runAgent(spec: AgentSpec): Promise<string> {
@@ -26,6 +27,11 @@ export async function runAgent(spec: AgentSpec): Promise<string> {
 }
 
 export async function runGroup(cadence: Cadence): Promise<Record<string, string>> {
+  const budget = await withinBudget();
+  if (!budget.ok) {
+    await logActivity("engineering", "cycle:skipped", budget.detail);
+    return { skipped: budget.detail };
+  }
   const due = AGENTS.filter((a) => a.cadence === cadence);
   await logActivity(due[0]?.id ?? "engineering", "cycle:start", `Running ${cadence} group (${due.length} agents).`);
   const results = await Promise.allSettled(due.map((a) => runAgent(a)));
