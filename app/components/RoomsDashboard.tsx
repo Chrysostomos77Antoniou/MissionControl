@@ -60,6 +60,9 @@ export function RoomsDashboard() {
               <div className="text-[11px]" style={{ color: "var(--text-dim)" }}>
                 Chief of Staff · overseeing {AGENTS.length} agents · reports to you
               </div>
+              <div className="text-[9px] mt-0.5 font-mono" style={{ color: "var(--text-dim)" }}>
+                Powered by Haiku 4.5
+              </div>
             </div>
           </div>
           <div className="flex-1 min-h-0">
@@ -86,7 +89,7 @@ export function RoomsDashboard() {
                     {openSpec.name}
                   </div>
                   <div className="text-[11px]" style={{ color: "var(--text-dim)" }}>
-                    Private channel
+                    Private channel · Haiku 4.5
                   </div>
                 </div>
               </div>

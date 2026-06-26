@@ -102,3 +102,14 @@ export const AGENTS: AgentSpec[] = [
 export const AGENT_BY_ID: Record<AgentId, AgentSpec> = Object.fromEntries(
   AGENTS.map((a) => [a.id, a]),
 ) as Record<AgentId, AgentSpec>;
+
+// Technical agents can write/fix code (their "Okay" runs the Opus fix loop).
+const TECHNICAL_IDS = new Set<AgentId>([
+  "cybersecurity",
+  "engineering",
+  "developer",
+  "qa",
+  "uxdesign",
+  "devops",
+]);
+export const isTechnical = (id: AgentId) => TECHNICAL_IDS.has(id);
