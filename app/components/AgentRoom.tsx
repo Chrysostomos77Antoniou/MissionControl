@@ -1,5 +1,6 @@
 "use client";
 import { Monogram } from "./Monogram";
+import { isTechnical } from "../../agents/registry";
 import type { AgentSpec } from "../../agents/registry";
 import type { AgentLive } from "../../lib/agent-status";
 
@@ -44,9 +45,9 @@ export function AgentRoom({
       <span
         className="text-[8.5px] mt-0.5 px-1.5 py-0.5 rounded font-mono"
         style={{ color: "var(--text-dim)", background: "rgba(255,255,255,0.03)", border: "1px solid var(--border)" }}
-        title="Sonnet 4.6: scheduled work & code fixes · Haiku 4.5: chat"
+        title="Sonnet 4.6: scheduled work · Haiku 4.5: chat · Opus 4.8: code fixes"
       >
-        Sonnet · Haiku
+        Sonnet · Haiku{isTechnical(spec.id) ? " · Opus" : ""}
       </span>
       <span className="acc-bar" />
     </button>
