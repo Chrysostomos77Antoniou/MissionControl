@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { AGENTS } from "../../agents/registry";
 import { AgentRoom } from "./AgentRoom";
 import { ChatPanel } from "./ChatPanel";
+import { Monogram } from "./Monogram";
 import type { AgentLive } from "../../lib/agent-status";
 import type { AgentId } from "../../lib/types";
 
@@ -14,8 +15,6 @@ const POS: [number, number][] = [
   [4, 1], [4, 2], [4, 3], [4, 4],
 ];
 
-const ORCH_AVATAR =
-  "https://api.dicebear.com/9.x/bottts/svg?seed=orchestrator-core&backgroundColor=0a1120&baseColor=38e8ff";
 
 export function RoomsDashboard() {
   const [status, setStatus] = useState<Record<string, AgentLive>>({});
@@ -43,37 +42,22 @@ export function RoomsDashboard() {
           />
         ))}
         <div
-          className="glass bracket rounded-xl p-5 flex flex-col"
+          className="glass rounded-xl p-5 flex flex-col"
           style={{
             gridRow: "2 / 4",
             gridColumn: "2 / 4",
-            borderTop: "2px solid var(--cyan)",
-            boxShadow: "0 0 50px rgba(56,232,255,0.18), inset 0 0 40px rgba(56,232,255,0.05)",
-            background: "linear-gradient(180deg, rgba(20,44,72,0.5), rgba(10,17,32,0.45))",
+            borderColor: "rgba(91,157,255,0.22)",
+            background: "linear-gradient(180deg, rgba(91,157,255,0.05), var(--surface))",
           }}
         >
-          <div className="flex items-center gap-3 mb-3 pb-3" style={{ borderBottom: "1px solid var(--border)" }}>
-            <div className="relative">
-              <span
-                className="absolute -inset-1 rounded-full"
-                style={{ border: "2px solid var(--cyan)", boxShadow: "0 0 18px var(--cyan)", animation: "ringspin 6s linear infinite", borderTopColor: "transparent" }}
-              />
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img
-                src={ORCH_AVATAR}
-                alt="Orchestrator"
-                width={48}
-                height={48}
-                className="rounded-full"
-                style={{ background: "#0a1120", boxShadow: "0 0 22px var(--cyan)" }}
-              />
-            </div>
-            <div className="leading-tight">
-              <div className="font-display text-sm font-black glow-text tracking-widest" style={{ color: "var(--cyan)" }}>
-                ORCHESTRATOR CORE
+          <div className="flex items-center gap-3 mb-4 pb-4" style={{ borderBottom: "1px solid var(--border)" }}>
+            <Monogram name="Orchestrator Core" accent="var(--cyan)" size={44} />
+            <div className="leading-snug">
+              <div className="font-display text-sm" style={{ color: "var(--text)" }}>
+                Orchestrator
               </div>
-              <div className="font-mono text-[9px]" style={{ color: "var(--text-dim)" }}>
-                CHIEF OF STAFF · OVERSEEING {AGENTS.length} AGENTS · REPORTS TO YOU
+              <div className="text-[11px]" style={{ color: "var(--text-dim)" }}>
+                Chief of Staff · overseeing {AGENTS.length} agents · reports to you
               </div>
             </div>
           </div>
@@ -90,27 +74,23 @@ export function RoomsDashboard() {
           onClick={() => setOpen(null)}
         >
           <div
-            className="glass bracket w-[500px] h-[540px] rounded-xl p-4 flex flex-col"
-            style={{ borderTop: `2px solid ${openSpec.accent}` }}
+            className="glass w-[500px] h-[540px] rounded-xl p-4 flex flex-col"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="flex justify-between items-center mb-3">
-              <div className="flex items-center gap-2">
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img
-                  src={`https://api.dicebear.com/9.x/bottts/svg?seed=${encodeURIComponent(openSpec.id)}&backgroundColor=0a1120`}
-                  alt={openSpec.name}
-                  width={30}
-                  height={30}
-                  className="rounded-full"
-                  style={{ boxShadow: `0 0 14px ${openSpec.accent}` }}
-                />
-                <span className="font-display text-xs font-bold glow-text" style={{ color: openSpec.accent }}>
-                  {openSpec.name.toUpperCase()} · SECURE CHANNEL
-                </span>
+            <div className="flex justify-between items-center mb-4 pb-3" style={{ borderBottom: "1px solid var(--border)" }}>
+              <div className="flex items-center gap-3">
+                <Monogram name={openSpec.name} accent={openSpec.accent} size={34} />
+                <div className="leading-tight">
+                  <div className="font-display text-sm" style={{ color: "var(--text)" }}>
+                    {openSpec.name}
+                  </div>
+                  <div className="text-[11px]" style={{ color: "var(--text-dim)" }}>
+                    Private channel
+                  </div>
+                </div>
               </div>
-              <button onClick={() => setOpen(null)} className="font-mono text-[11px]" style={{ color: "var(--text-dim)" }}>
-                ✕ CLOSE
+              <button onClick={() => setOpen(null)} className="text-[11px]" style={{ color: "var(--text-dim)" }}>
+                ✕ Close
               </button>
             </div>
             <div className="flex-1 min-h-0">

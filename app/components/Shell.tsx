@@ -40,12 +40,12 @@ export function Shell() {
           >
             {view === "dashboard" && <RoomsDashboard />}
             {view === "inbox" && (
-              <Panel title="SUGGESTIONS INBOX" onBack={() => go("dashboard")}>
+              <Panel title="Suggestions Inbox" onBack={() => go("dashboard")}>
                 <SuggestionsFeed />
               </Panel>
             )}
             {view === "logs" && (
-              <Panel title="SYSTEM LOGS" onBack={() => go("dashboard")}>
+              <Panel title="System Logs" onBack={() => go("dashboard")}>
                 <LiveFeed />
               </Panel>
             )}
@@ -58,17 +58,17 @@ export function Shell() {
 
 function Panel({ title, onBack, children }: { title: string; onBack: () => void; children: React.ReactNode }) {
   return (
-    <div className="glass bracket rounded-xl p-5 max-w-3xl mx-auto">
+    <div className="glass rounded-xl p-5 max-w-3xl mx-auto">
       <div className="flex items-center justify-between mb-4">
-        <h2 className="font-display text-sm font-bold glow-text" style={{ color: "var(--cyan)" }}>
+        <h2 className="font-display text-sm" style={{ color: "var(--text)" }}>
           {title}
         </h2>
         <button
           onClick={onBack}
-          className="font-display text-[11px] px-3 py-1 rounded glow-text"
-          style={{ color: "var(--cyan)", border: "1px solid var(--border)" }}
+          className="text-[12px] px-3 py-1 rounded"
+          style={{ color: "var(--text-dim)", border: "1px solid var(--border)" }}
         >
-          ◄ BACK TO DECK
+          ← Back to dashboard
         </button>
       </div>
       {children}

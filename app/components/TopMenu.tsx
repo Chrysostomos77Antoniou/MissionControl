@@ -25,18 +25,15 @@ export function TopMenu({ view, onNavigate }: { view: View; onNavigate: (v: View
     <header className="flex justify-between items-center mb-5 above">
       <div className="flex items-center gap-5">
         <div className="flex items-center gap-2">
-          <span
-            className="w-3 h-3 rounded-full"
-            style={{ background: "var(--growth)", boxShadow: "0 0 12px var(--growth)", animation: "pulse 2s infinite" }}
-          />
-          <h1 className="font-display font-black tracking-[0.2em] text-sm glow-text" style={{ color: "var(--cyan)" }}>
-            FOOTRANK · MISSION CONTROL
+          <span className="w-2 h-2 rounded-full" style={{ background: "var(--growth)" }} />
+          <h1 className="font-display text-sm" style={{ color: "var(--text)" }}>
+            FootRank Mission Control
           </h1>
         </div>
-        <nav className="flex gap-2">
-          <NavBtn to="dashboard" label="DECK" />
-          <NavBtn to="inbox" label="INBOX" />
-          <NavBtn to="logs" label="LOGS" />
+        <nav className="flex gap-1">
+          <NavBtn to="dashboard" label="Dashboard" />
+          <NavBtn to="inbox" label="Inbox" />
+          <NavBtn to="logs" label="Logs" />
         </nav>
       </div>
       <div className="flex items-center gap-3">
