@@ -33,20 +33,32 @@ export async function recordUsage(model: string, usage: Usage | undefined): Prom
   });
 }
 
+const LOW_CREDIT = "__low_credit__";
+
+// Record that an API call failed because the real Anthropic balance is empty,
+// so the meter can show the truth (it otherwise only knows the budget you set).
+export async function flagApiError(message: string): Promise<void> {
+  if (!/credit balance/i.test(message)) return;
+  await supabaseAdmin.from("usage_log").insert({ model: LOW_CREDIT, cost: 0 });
+}
+
 export interface SpendSummary {
   today: number;
   total: number;
   budget: number | null;
   remaining: number | null;
   dailyCap: number | null;
+  accountEmpty: boolean;
 }
 
 export async function spendSummary(): Promise<SpendSummary> {
   const startOfDay = new Date();
   startOfDay.setHours(0, 0, 0, 0);
-  const [all, todayRows] = await Promise.all([
+  const tenMinAgo = new Date(Date.now() - 10 * 60 * 1000).toISOString();
+  const [all, todayRows, lowRows] = await Promise.all([
     supabaseAdmin.from("usage_log").select("cost"),
     supabaseAdmin.from("usage_log").select("cost").gte("created_at", startOfDay.toISOString()),
+    supabaseAdmin.from("usage_log").select("id", { count: "exact", head: true }).eq("model", LOW_CREDIT).gte("created_at", tenMinAgo),
   ]);
   const sum = (rows: { cost: number }[] | null) => (rows ?? []).reduce((a, r) => a + Number(r.cost), 0);
   const total = sum(all.data as { cost: number }[] | null);
@@ -59,6 +71,7 @@ export async function spendSummary(): Promise<SpendSummary> {
     budget,
     remaining: budget !== null ? Math.max(0, budget - total) : null,
     dailyCap,
+    accountEmpty: (lowRows.count ?? 0) > 0,
   };
 }
 

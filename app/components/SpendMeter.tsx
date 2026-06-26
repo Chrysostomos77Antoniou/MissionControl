@@ -7,6 +7,7 @@ interface Spend {
   budget: number | null;
   remaining: number | null;
   dailyCap: number | null;
+  accountEmpty: boolean;
 }
 
 export function SpendMeter() {
@@ -29,7 +30,11 @@ export function SpendMeter() {
       title="Anthropic API spend (computed from token usage)"
     >
       <span style={{ color: "var(--text-dim)" }}>◈ CREDITS</span>
-      {s.remaining !== null ? (
+      {s.accountEmpty ? (
+        <span style={{ color: "var(--danger)" }} className="glow-text">
+          ⚠ ACCOUNT EMPTY — top up
+        </span>
+      ) : s.remaining !== null ? (
         <span style={{ color: low ? "var(--danger)" : "var(--growth)" }} className="glow-text">
           {fmt(s.remaining)} left
         </span>

@@ -34,8 +34,9 @@ export function SuggestionCard({ s, onResolve }: { s: Suggestion; onResolve: () 
     if (polling.current) return;
     polling.current = true;
     const res = await fetch(`/api/suggestions/${s.id}/qa-tick`, { method: "POST" });
-    const d = (await res.json()) as { qa_status: QaStatus; qa_log?: string | null };
+    const d = (await res.json().catch(() => null)) as { qa_status: QaStatus; qa_log?: string | null } | null;
     polling.current = false;
+    if (!d) return;
     setQa(d.qa_status);
     if (d.qa_log) setQaLog(d.qa_log);
   }, [s.id]);
@@ -59,21 +60,27 @@ export function SuggestionCard({ s, onResolve }: { s: Suggestion; onResolve: () 
   const handle = async () => {
     setBusy("handle");
     setNote("");
-    const res = await fetch(`/api/suggestions/${s.id}/handle`, { method: "POST" });
-    const d = (await res.json()) as { qa_status: QaStatus; result: string };
-    setBusy(null);
-    setResult(d.result);
-    setQa(d.qa_status);
+    try {
+      const res = await fetch(`/api/suggestions/${s.id}/handle`, { method: "POST" });
+      const d = (await res.json().catch(() => null)) as { qa_status: QaStatus; result: string } | null;
+      if (!res.ok || !d) throw new Error("bad response");
+      setResult(d.result);
+      setQa(d.qa_status);
+    } catch {
+      setResult("⚠ Could not start the agent. Check Anthropic credits and that the app is running.");
+    } finally {
+      setBusy(null);
+    }
   };
 
   const pushLive = async () => {
     setBusy("finalize");
     setNote("");
     const res = await fetch(`/api/suggestions/${s.id}/finalize`, { method: "POST" });
-    const d = (await res.json()) as { ok: boolean; detail: string };
+    const d = (await res.json().catch(() => null)) as { ok: boolean; detail: string } | null;
     setBusy(null);
-    if (d.ok) onResolve();
-    else setNote(`⚠ ${d.detail}`);
+    if (d?.ok) onResolve();
+    else setNote(`⚠ ${d?.detail ?? "Push failed — try again."}`);
   };
 
   const banner = (() => {

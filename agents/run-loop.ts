@@ -1,7 +1,7 @@
 import type Anthropic from "@anthropic-ai/sdk";
 import { anthropic, OPUS } from "../lib/anthropic";
 import { dispatchTool } from "../tools/registry";
-import { recordUsage } from "../lib/usage";
+import { recordUsage, flagApiError } from "../lib/usage";
 import { logActivity } from "../lib/memory";
 import type { AgentId } from "../lib/types";
 
@@ -31,19 +31,30 @@ export async function runAgentLoop(opts: {
       .join("\n");
 
   for (let turn = 0; turn < maxTurns; turn++) {
-    const response = await anthropic.messages.create({
-      model,
-      max_tokens: 8000,
-      thinking: { type: "adaptive" },
-      // Cache the (stable) system prompt + tool definitions so every turn in
-      // the loop — and repeat runs of the same agent — read them at ~10% cost.
-      cache_control: { type: "ephemeral" },
-      // Lower thinking effort on routine agents to cut token spend.
-      ...(effort ? { output_config: { effort } } : {}),
-      system,
-      tools,
-      messages,
-    });
+    let response;
+    try {
+      response = await anthropic.messages.create({
+        model,
+        max_tokens: 8000,
+        thinking: { type: "adaptive" },
+        // Cache the (stable) system prompt + tool definitions so every turn in
+        // the loop — and repeat runs of the same agent — read them at ~10% cost.
+        cache_control: { type: "ephemeral" },
+        // Lower thinking effort on routine agents to cut token spend.
+        ...(effort ? { output_config: { effort } } : {}),
+        system,
+        tools,
+        messages,
+      });
+    } catch (e) {
+      // Degrade gracefully (e.g. out of credits) instead of throwing a 500.
+      const msg = e instanceof Error ? e.message : String(e);
+      await flagApiError(msg);
+      const friendly = /credit balance/i.test(msg)
+        ? "⚠ Anthropic credit balance too low — add funds to use the agents."
+        : `⚠ Agent error: ${msg.slice(0, 200)}`;
+      return { text: friendly, toolOutputs };
+    }
     await recordUsage(model, response.usage);
 
     if (response.stop_reason === "end_turn") return { text: finalText(response.content), toolOutputs };
