@@ -55,23 +55,31 @@ export async function spendSummary(): Promise<SpendSummary> {
   const startOfDay = new Date();
   startOfDay.setHours(0, 0, 0, 0);
   const tenMinAgo = new Date(Date.now() - 10 * 60 * 1000).toISOString();
-  const [all, todayRows, lowRows] = await Promise.all([
-    supabaseAdmin.from("usage_log").select("cost"),
-    supabaseAdmin.from("usage_log").select("cost").gte("created_at", startOfDay.toISOString()),
-    supabaseAdmin.from("usage_log").select("id", { count: "exact", head: true }).eq("model", LOW_CREDIT).gte("created_at", tenMinAgo),
+  const [all, todayRows, lastLow, lastOk] = await Promise.all([
+    supabaseAdmin.from("usage_log").select("cost").neq("model", LOW_CREDIT),
+    supabaseAdmin.from("usage_log").select("cost").neq("model", LOW_CREDIT).gte("created_at", startOfDay.toISOString()),
+    supabaseAdmin.from("usage_log").select("created_at").eq("model", LOW_CREDIT).order("created_at", { ascending: false }).limit(1),
+    supabaseAdmin.from("usage_log").select("created_at").neq("model", LOW_CREDIT).order("created_at", { ascending: false }).limit(1),
   ]);
   const sum = (rows: { cost: number }[] | null) => (rows ?? []).reduce((a, r) => a + Number(r.cost), 0);
   const total = sum(all.data as { cost: number }[] | null);
   const today = sum(todayRows.data as { cost: number }[] | null);
   const budget = process.env.ANTHROPIC_BUDGET ? Number(process.env.ANTHROPIC_BUDGET) : null;
   const dailyCap = process.env.ANTHROPIC_DAILY_CAP ? Number(process.env.ANTHROPIC_DAILY_CAP) : null;
+
+  // Empty only if the latest failure is recent AND no successful call since.
+  const lowAt = lastLow.data?.[0]?.created_at as string | undefined;
+  const okAt = lastOk.data?.[0]?.created_at as string | undefined;
+  const accountEmpty =
+    !!lowAt && lowAt >= tenMinAgo && (!okAt || okAt < lowAt);
+
   return {
     today,
     total,
     budget,
     remaining: budget !== null ? Math.max(0, budget - total) : null,
     dailyCap,
-    accountEmpty: (lowRows.count ?? 0) > 0,
+    accountEmpty,
   };
 }
 
