@@ -83,10 +83,16 @@ export function SuggestionCard({ s, onResolve }: { s: Suggestion; onResolve: () 
     else setNote(`⚠ ${d?.detail ?? "Push failed — try again."}`);
   };
 
+  // An infrastructure failure (no credits, budget cap, API error) is NOT a real
+  // "the agent reviewed it and needs you" — show it neutrally instead.
+  const couldntRun = !!result && /credit balance|budget|agent error|could not (start|reach)/i.test(result);
+
   const banner = (() => {
     if (qa === "testing" || qa === "fixing")
       return { text: "🧪 QA TESTING ON EMULATOR…", bg: BLUE, fg: "#fff" };
     if (qa === "passed") return { text: "✓ QA PASSED — READY TO PUSH LIVE", bg: GREEN, fg: "#000" };
+    if (qa === "needs_owner" && couldntRun)
+      return { text: "⚠ AGENT COULDN'T RUN — ADD CREDITS", bg: "#3a3a3a", fg: "#e7eaf0" };
     if (qa === "needs_owner") return { text: "⚠ ACTION NEEDED FROM YOU", bg: ORANGE, fg: "#000" };
     return null;
   })();
