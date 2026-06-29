@@ -40,11 +40,24 @@ export async function POST() {
     //    when no APK exists — if a build fails or an old APK is present, it
     //    silently ships stale code. An explicit build surfaces compile errors
     //    and guarantees the phone gets the current source.
-    try {
-      const build = await run("flutter build apk --release", {
-        cwd,
-        timeout: 540000,
+    //    The Supabase URL + anon key MUST be passed as --dart-define; without
+    //    them the app falls back to the localhost placeholder backend and all
+    //    sign-in / data calls fail (DNS_PROBE_FINISHED_NXDOMAIN).
+    const supabaseUrl = process.env.SUPABASE_URL;
+    const supabaseAnonKey = process.env.SUPABASE_ANON_KEY;
+    if (!supabaseUrl || !supabaseAnonKey) {
+      return NextResponse.json({
+        ok: false,
+        detail:
+          (syncOut ? syncOut + "\n\n" : "") +
+          "SUPABASE_URL / SUPABASE_ANON_KEY missing from Mission Control env — refusing to build, because the app would point at the localhost placeholder backend and sign-in would break. Add both to .env.local.",
       });
+    }
+    try {
+      const build = await run(
+        `flutter build apk --release --dart-define=SUPABASE_URL=${supabaseUrl} --dart-define=SUPABASE_ANON_KEY=${supabaseAnonKey}`,
+        { cwd, timeout: 540000 },
+      );
       const buildOut = (build.stdout + "\n" + build.stderr).trim();
       if (!/Built .*app-release\.apk/i.test(buildOut)) {
         return NextResponse.json({
@@ -82,8 +95,9 @@ export async function POST() {
     let launched = false;
     if (ok) {
       try {
+        const adb = process.env.ADB_PATH || "adb";
         await run(
-          "adb shell monkey -p com.footballcy.footrank -c android.intent.category.LAUNCHER 1",
+          `"${adb}" shell monkey -p com.footballcy.footrank -c android.intent.category.LAUNCHER 1`,
           { cwd, timeout: 30000 },
         );
         launched = true;
