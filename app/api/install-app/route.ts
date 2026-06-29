@@ -36,17 +36,68 @@ export async function POST() {
       });
     }
 
-    // 2. Build + install the freshly-synced master onto the connected phone.
-    const { stdout, stderr } = await run("flutter install", {
-      cwd,
-      timeout: 570000,
-    });
+    // 2. Build a FRESH release APK. `flutter install` on its own only builds
+    //    when no APK exists — if a build fails or an old APK is present, it
+    //    silently ships stale code. An explicit build surfaces compile errors
+    //    and guarantees the phone gets the current source.
+    try {
+      const build = await run("flutter build apk --release", {
+        cwd,
+        timeout: 540000,
+      });
+      const buildOut = (build.stdout + "\n" + build.stderr).trim();
+      if (!/Built .*app-release\.apk/i.test(buildOut)) {
+        return NextResponse.json({
+          ok: false,
+          detail:
+            (syncOut ? syncOut + "\n\n" : "") +
+            "Build did not produce an APK:\n" +
+            buildOut.slice(-1400),
+        });
+      }
+    } catch (e) {
+      const msg =
+        e instanceof Error
+          ? (e as Error & { stderr?: string }).stderr || e.message
+          : String(e);
+      return NextResponse.json({
+        ok: false,
+        detail:
+          (syncOut ? syncOut + "\n\n" : "") +
+          "Release build FAILED (the phone was not updated):\n" +
+          String(msg).slice(-1400),
+      });
+    }
+
+    // 3. Install the freshly-built APK, then launch it on the device.
+    const { stdout, stderr } = await run(
+      "flutter install --use-application-binary build/app/outputs/flutter-apk/app-release.apk",
+      { cwd, timeout: 180000 },
+    );
     const out = (stdout + "\n" + stderr).trim();
     const ok =
       /installed|success/i.test(out) && !/no (devices|connected)/i.test(out);
+
+    // Best-effort auto-launch (don't fail the request if adb isn't on PATH).
+    let launched = false;
+    if (ok) {
+      try {
+        await run(
+          "adb shell monkey -p com.footballcy.footrank -c android.intent.category.LAUNCHER 1",
+          { cwd, timeout: 30000 },
+        );
+        launched = true;
+      } catch {
+        launched = false;
+      }
+    }
+
     return NextResponse.json({
       ok,
-      detail: (syncOut ? syncOut + "\n\n" : "") + out.slice(-1400),
+      detail:
+        (syncOut ? syncOut + "\n\n" : "") +
+        out.slice(-1200) +
+        (ok ? (launched ? "\n\nLaunched on device." : "\n\nInstalled (open it manually).") : ""),
     });
   } catch (e) {
     const msg =
