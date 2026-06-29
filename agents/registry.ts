@@ -14,7 +14,9 @@ ACCURACY IS CRITICAL — never claim something is missing, broken, or "should be
 
 Be economical with tool calls — a few targeted reads, then SAVE 3-5 verified suggestions; don't read the whole codebase first, and make sure you've saved before finishing. Avoid repeating recent suggestions. Be specific and actionable, not generic. Respond directly without preamble.`;
 
-const CODE_NOTE = `You can read the FootRank Flutter codebase with list_repo and read_repo_file, and the LIVE database with db_read (read-only). Ground every claim in what the code or database actually shows — cite file paths or query results. Verify before you assert.`;
+const CODE_NOTE = `You can read the FootRank Flutter codebase with list_repo and read_repo_file, and the LIVE database with db_read (read-only). Ground every claim in what the code or database actually shows — cite file paths or query results. Verify before you assert.
+
+Authoritative build/identity/config values do NOT live in lib/ — before claiming such a value is "missing", "unknown", or "a placeholder", read the real source: iOS bundle id & signing → ios/Runner.xcodeproj/project.pbxproj (PRODUCT_BUNDLE_IDENTIFIER); macOS → macos/Runner.xcodeproj/project.pbxproj; Android applicationId/namespace/versions → android/app/build.gradle(.kts); deps & app version → pubspec.yaml; CI → .github/workflows/. If the value exists somewhere in the repo, find it and cite it — never say you have no source without checking these files first.`;
 
 export const AGENTS: AgentSpec[] = [
   {
