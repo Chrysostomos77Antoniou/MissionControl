@@ -33,6 +33,7 @@ export function ChatPanel({
   const scrollRef = useRef<HTMLDivElement>(null);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const recRef = useRef<any>(null);
+  const voiceRef = useRef<SpeechSynthesisVoice | null>(null);
 
   // Keep the newest message in view (including while the answer streams in).
   useEffect(() => {
@@ -40,11 +41,45 @@ export function ChatPanel({
     if (el) el.scrollTop = el.scrollHeight;
   }, [msgs]);
 
+  // Pick the most natural-sounding voice the browser offers (Edge ships neural
+  // "Natural" voices that sound human; Chrome has Google's voices).
+  useEffect(() => {
+    if (typeof window === "undefined" || !window.speechSynthesis) return;
+    const pick = () => {
+      const voices = window.speechSynthesis.getVoices();
+      if (!voices.length) return;
+      const score = (v: SpeechSynthesisVoice) => {
+        const n = v.name.toLowerCase();
+        let s = 0;
+        if (v.lang.startsWith("en")) s += 5;
+        if (v.lang === "en-US" || v.lang === "en-GB") s += 2;
+        if (/natural|neural/.test(n)) s += 12; // Edge neural — most human
+        if (/google/.test(n)) s += 6; // Chrome's voices
+        if (/aria|jenny|guy|libby|sonia|ryan|emma/.test(n)) s += 3; // known-good MS voices
+        if (/zira|david|mark|hazel/.test(n)) s -= 2; // older, robotic MS voices
+        return s;
+      };
+      voiceRef.current = [...voices].sort((a, b) => score(b) - score(a))[0] ?? null;
+    };
+    pick();
+    window.speechSynthesis.onvoiceschanged = pick;
+    return () => {
+      window.speechSynthesis.onvoiceschanged = null;
+    };
+  }, []);
+
   const speak = (text: string) => {
     if (!speakOut || typeof window === "undefined" || !window.speechSynthesis) return;
     window.speechSynthesis.cancel();
     const u = new SpeechSynthesisUtterance(text);
-    u.lang = "en-US";
+    if (voiceRef.current) {
+      u.voice = voiceRef.current;
+      u.lang = voiceRef.current.lang;
+    } else {
+      u.lang = "en-US";
+    }
+    u.rate = 1.0;
+    u.pitch = 1.0;
     window.speechSynthesis.speak(u);
   };
 
