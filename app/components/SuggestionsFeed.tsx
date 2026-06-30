@@ -1,6 +1,7 @@
 "use client";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { SuggestionCard } from "./SuggestionCard";
+import { apiGet } from "../../lib/api";
 import { AGENTS } from "../../agents/registry";
 import type { AgentId, Suggestion } from "../../lib/types";
 
@@ -8,7 +9,9 @@ export function SuggestionsFeed() {
   const [items, setItems] = useState<Suggestion[]>([]);
   const [filter, setFilter] = useState<AgentId | "all">("all");
   const load = useCallback(() => {
-    fetch("/api/suggestions").then((r) => r.json()).then(setItems);
+    apiGet<Suggestion[]>("/api/suggestions").then((d) => {
+      if (d) setItems(d);
+    });
   }, []);
   useEffect(() => {
     load();

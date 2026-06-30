@@ -1,12 +1,16 @@
 "use client";
 import { useEffect, useState } from "react";
 import { AGENT_BY_ID } from "../../agents/registry";
+import { apiGet } from "../../lib/api";
 import type { ActivityEntry } from "../../lib/types";
 
 export function LiveFeed() {
   const [entries, setEntries] = useState<ActivityEntry[]>([]);
   useEffect(() => {
-    const load = () => fetch("/api/feed").then((r) => r.json()).then(setEntries);
+    const load = () =>
+      apiGet<ActivityEntry[]>("/api/feed").then((d) => {
+        if (d) setEntries(d);
+      });
     load();
     const t = setInterval(load, 15000);
     return () => clearInterval(t);

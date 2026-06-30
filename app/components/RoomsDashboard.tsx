@@ -4,6 +4,7 @@ import { AGENTS } from "../../agents/registry";
 import { AgentRoom } from "./AgentRoom";
 import { ChatPanel } from "./ChatPanel";
 import { Monogram } from "./Monogram";
+import { apiGet } from "../../lib/api";
 import type { AgentLive } from "../../lib/agent-status";
 import type { AgentId } from "../../lib/types";
 
@@ -21,7 +22,10 @@ export function RoomsDashboard() {
   const [open, setOpen] = useState<AgentId | null>(null);
 
   useEffect(() => {
-    const load = () => fetch("/api/agent-status").then((r) => r.json()).then(setStatus);
+    const load = () =>
+      apiGet<Record<string, AgentLive>>("/api/agent-status").then((d) => {
+        if (d) setStatus(d);
+      });
     load();
     const t = setInterval(load, 10000);
     return () => clearInterval(t);
