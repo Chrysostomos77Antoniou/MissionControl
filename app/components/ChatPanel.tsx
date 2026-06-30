@@ -68,9 +68,7 @@ export function ChatPanel({
     };
   }, []);
 
-  const speak = (text: string) => {
-    if (!speakOut || typeof window === "undefined" || !window.speechSynthesis) return;
-    window.speechSynthesis.cancel();
+  const buildUtterance = (text: string) => {
     const u = new SpeechSynthesisUtterance(text);
     if (voiceRef.current) {
       u.voice = voiceRef.current;
@@ -80,7 +78,30 @@ export function ChatPanel({
     }
     u.rate = 1.0;
     u.pitch = 1.0;
-    window.speechSynthesis.speak(u);
+    return u;
+  };
+
+  const speakNow = (text: string) => {
+    if (typeof window === "undefined" || !window.speechSynthesis) return;
+    const synth = window.speechSynthesis;
+    synth.cancel();
+    const u = buildUtterance(text);
+    // Chrome/Edge silently pause long utterances after ~15s — nudge resume.
+    const keep = setInterval(() => {
+      if (!synth.speaking) {
+        clearInterval(keep);
+        return;
+      }
+      synth.resume();
+    }, 8000);
+    u.onend = () => clearInterval(keep);
+    u.onerror = () => clearInterval(keep);
+    synth.speak(u);
+  };
+
+  const speak = (text: string) => {
+    if (!speakOut) return;
+    speakNow(text);
   };
 
   const send = async (override?: string) => {
@@ -219,13 +240,14 @@ export function ChatPanel({
         />
         {voice && (
           <button
-            onClick={() =>
-              setSpeakOut((s) => {
-                const n = !s;
-                if (!n && typeof window !== "undefined") window.speechSynthesis?.cancel();
-                return n;
-              })
-            }
+            onClick={() => {
+              const next = !speakOut;
+              setSpeakOut(next);
+              if (typeof window === "undefined" || !window.speechSynthesis) return;
+              if (next)
+                speakNow("Voice on."); // confirm it works + unlock audio in this gesture
+              else window.speechSynthesis.cancel();
+            }}
             title={speakOut ? "Voice replies on" : "Voice replies off"}
             className={btn}
             style={{
