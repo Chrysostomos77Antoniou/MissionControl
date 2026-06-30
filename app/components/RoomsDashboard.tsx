@@ -20,6 +20,10 @@ const POS: [number, number][] = [
 export function RoomsDashboard() {
   const [status, setStatus] = useState<Record<string, AgentLive>>({});
   const [open, setOpen] = useState<AgentId | null>(null);
+  // Orchestrator conversation lives here so it's shared between the inline
+  // panel and the expanded window (no lost history when you maximise).
+  const [orchMsgs, setOrchMsgs] = useState<{ role: "you" | "agent"; text: string }[]>([]);
+  const [orchBig, setOrchBig] = useState(false);
 
   useEffect(() => {
     const load = () =>
@@ -35,7 +39,7 @@ export function RoomsDashboard() {
 
   return (
     <>
-      <div className="grid gap-3" style={{ gridTemplateColumns: "repeat(4,1fr)", gridTemplateRows: "repeat(4,130px)" }}>
+      <div className="grid gap-3" style={{ gridTemplateColumns: "repeat(4,1fr)", gridTemplateRows: "repeat(4,168px)" }}>
         {AGENTS.map((spec, i) => (
           <AgentRoom
             key={spec.id}
@@ -55,25 +59,74 @@ export function RoomsDashboard() {
             boxShadow: "0 0 50px -18px rgba(255,150,40,0.4)",
           }}
         >
-          <div className="flex items-center gap-3 mb-4 pb-4" style={{ borderBottom: "1px solid var(--border)" }}>
-            <Monogram name="Orchestrator Core" accent="var(--cyan)" size={44} />
-            <div className="leading-snug">
+          <div className="flex items-center gap-3 mb-3 pb-3" style={{ borderBottom: "1px solid var(--border)" }}>
+            <Monogram name="Orchestrator Core" accent="var(--cyan)" size={40} />
+            <div className="leading-snug flex-1 min-w-0">
               <div className="font-display text-sm" style={{ color: "var(--text)" }}>
                 Orchestrator
               </div>
-              <div className="text-[11px]" style={{ color: "var(--text-dim)" }}>
-                Chief of Staff · overseeing {AGENTS.length} agents · reports to you
-              </div>
-              <div className="text-[9px] mt-0.5 font-mono" style={{ color: "var(--text-dim)" }}>
-                Powered by Haiku 4.5
+              <div className="text-[11px] truncate" style={{ color: "var(--text-dim)" }}>
+                Chief of Staff · {AGENTS.length} agents · Haiku 4.5
               </div>
             </div>
+            <button
+              onClick={() => setOrchBig(true)}
+              title="Expand chat"
+              className="shrink-0 text-[11px] px-2.5 py-1 rounded-md font-semibold"
+              style={{ color: "var(--text)", border: "1px solid var(--border)", background: "color-mix(in srgb, var(--cyan) 14%, transparent)" }}
+            >
+              ⤢ Expand
+            </button>
           </div>
           <div className="flex-1 min-h-0">
-            <ChatPanel endpoint="/api/chat" accent="var(--cyan)" placeholder="Ask for a full status report, or issue a directive…" />
+            <ChatPanel
+              endpoint="/api/chat"
+              accent="var(--cyan)"
+              agentName="Orchestrator"
+              messages={orchMsgs}
+              setMessages={setOrchMsgs}
+              placeholder="Ask for a full status report, or issue a directive…"
+            />
           </div>
         </div>
       </div>
+
+      {orchBig && (
+        <div
+          className="fixed inset-0 flex items-center justify-center z-50"
+          style={{ background: "rgba(2, 6, 14, 0.8)", backdropFilter: "blur(4px)" }}
+          onClick={() => setOrchBig(false)}
+        >
+          <div
+            className="glass rounded-xl p-5 flex flex-col"
+            style={{ width: "min(820px, 92vw)", height: "min(82vh, 780px)" }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex justify-between items-center mb-4 pb-3" style={{ borderBottom: "1px solid var(--border)" }}>
+              <div className="flex items-center gap-3">
+                <Monogram name="Orchestrator Core" accent="var(--cyan)" size={36} />
+                <div className="leading-tight">
+                  <div className="font-display text-sm" style={{ color: "var(--text)" }}>Orchestrator</div>
+                  <div className="text-[11px]" style={{ color: "var(--text-dim)" }}>Chief of Staff · {AGENTS.length} agents · Haiku 4.5</div>
+                </div>
+              </div>
+              <button onClick={() => setOrchBig(false)} className="text-[11px]" style={{ color: "var(--text-dim)" }}>
+                ✕ Close
+              </button>
+            </div>
+            <div className="flex-1 min-h-0">
+              <ChatPanel
+                endpoint="/api/chat"
+                accent="var(--cyan)"
+                agentName="Orchestrator"
+                messages={orchMsgs}
+                setMessages={setOrchMsgs}
+                placeholder="Ask for a full status report, or issue a directive…"
+              />
+            </div>
+          </div>
+        </div>
+      )}
 
       {openSpec && (
         <div
@@ -105,6 +158,7 @@ export function RoomsDashboard() {
               <ChatPanel
                 endpoint={`/api/agent-chat/${openSpec.id}`}
                 accent={openSpec.accent}
+                agentName={openSpec.name}
                 placeholder={`Open a private channel with ${openSpec.name}…`}
               />
             </div>
