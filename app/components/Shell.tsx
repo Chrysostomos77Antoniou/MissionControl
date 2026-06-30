@@ -1,6 +1,6 @@
 "use client";
 import { useState } from "react";
-import { AnimatePresence, motion } from "framer-motion";
+import { motion } from "framer-motion";
 import { TopMenu } from "./TopMenu";
 import { RoomsDashboard } from "./RoomsDashboard";
 import { SuggestionsFeed } from "./SuggestionsFeed";
@@ -8,49 +8,42 @@ import { LiveFeed } from "./LiveFeed";
 
 export type View = "dashboard" | "inbox" | "logs";
 
-const variants = {
-  enter: (dir: number) => ({ x: dir > 0 ? "100%" : "-100%", opacity: 0 }),
-  center: { x: 0, opacity: 1 },
-  exit: (dir: number) => ({ x: dir > 0 ? "-100%" : "100%", opacity: 0 }),
-};
+const ORDER: View[] = ["dashboard", "inbox", "logs"];
 
 export function Shell() {
   const [view, setView] = useState<View>("dashboard");
-  const [dir, setDir] = useState(1);
-
-  const go = (v: View) => {
-    setDir(v === "dashboard" ? -1 : 1);
-    setView(v);
-  };
+  const go = (v: View) => setView(v);
+  const index = ORDER.indexOf(view);
 
   return (
     <main className="p-4 above">
       <TopMenu view={view} onNavigate={go} />
+      {/* Every view stays MOUNTED and the track slides horizontally, so a typed
+          orchestrator prompt or an in-flight agent task is never lost when you
+          switch tabs. We animate `left` (not a transform) so the agent modal's
+          `position: fixed` keeps working. */}
       <div className="relative overflow-hidden" style={{ minHeight: "78vh" }}>
-        <AnimatePresence custom={dir} mode="popLayout" initial={false}>
-          <motion.div
-            key={view}
-            custom={dir}
-            variants={variants}
-            initial="enter"
-            animate="center"
-            exit="exit"
-            transition={{ type: "tween", ease: [0.4, 0, 0.2, 1], duration: 0.45 }}
-            className="w-full"
-          >
-            {view === "dashboard" && <RoomsDashboard />}
-            {view === "inbox" && (
-              <Panel title="Suggestions Inbox" onBack={() => go("dashboard")}>
-                <SuggestionsFeed />
-              </Panel>
-            )}
-            {view === "logs" && (
-              <Panel title="System Logs" onBack={() => go("dashboard")}>
-                <LiveFeed />
-              </Panel>
-            )}
-          </motion.div>
-        </AnimatePresence>
+        <motion.div
+          className="flex items-start"
+          style={{ position: "relative", width: "300%" }}
+          animate={{ left: `-${index * 100}%` }}
+          initial={false}
+          transition={{ type: "tween", ease: [0.4, 0, 0.2, 1], duration: 0.45 }}
+        >
+          <div className="shrink-0" style={{ width: "33.3333%" }}>
+            <RoomsDashboard />
+          </div>
+          <div className="shrink-0" style={{ width: "33.3333%" }}>
+            <Panel title="Suggestions Inbox" onBack={() => go("dashboard")}>
+              <SuggestionsFeed />
+            </Panel>
+          </div>
+          <div className="shrink-0" style={{ width: "33.3333%" }}>
+            <Panel title="System Logs" onBack={() => go("dashboard")}>
+              <LiveFeed />
+            </Panel>
+          </div>
+        </motion.div>
       </div>
     </main>
   );
