@@ -244,9 +244,14 @@ export function ChatPanel({
               const next = !speakOut;
               setSpeakOut(next);
               if (typeof window === "undefined" || !window.speechSynthesis) return;
-              if (next)
-                speakNow("Voice on."); // confirm it works + unlock audio in this gesture
-              else window.speechSynthesis.cancel();
+              if (next) {
+                // Read the latest reply aloud right away (and unlock audio in
+                // this gesture); future replies then auto-read too.
+                const last = [...msgs].reverse().find((m) => m.role === "agent" && m.text.trim());
+                speakNow(last ? last.text : "Voice on.");
+              } else {
+                window.speechSynthesis.cancel();
+              }
             }}
             title={speakOut ? "Voice replies on" : "Voice replies off"}
             className={btn}
