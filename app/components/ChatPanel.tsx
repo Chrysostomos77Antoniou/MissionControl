@@ -10,6 +10,7 @@ export function ChatPanel({
   placeholder,
   agentName = "Agent",
   voice = false,
+  storageKey,
   messages,
   setMessages,
 }: {
@@ -18,10 +19,19 @@ export function ChatPanel({
   placeholder?: string;
   agentName?: string;
   voice?: boolean;
+  storageKey?: string;
   messages?: Msg[];
   setMessages?: Dispatch<SetStateAction<Msg[]>>;
 }) {
-  const [internal, setInternal] = useState<Msg[]>([]);
+  const [internal, setInternal] = useState<Msg[]>(() => {
+    if (typeof window === "undefined" || !storageKey) return [];
+    try {
+      const raw = localStorage.getItem(storageKey);
+      return raw ? (JSON.parse(raw) as Msg[]) : [];
+    } catch {
+      return [];
+    }
+  });
   const msgs = messages ?? internal;
   const setMsgs = setMessages ?? setInternal;
   const [input, setInput] = useState("");
@@ -43,6 +53,17 @@ export function ChatPanel({
     const el = scrollRef.current;
     if (el) el.scrollTop = el.scrollHeight;
   }, [msgs]);
+
+  // Persist uncontrolled chats (agent channels) across reloads; controlled
+  // chats (the orchestrator) are persisted by the parent.
+  useEffect(() => {
+    if (typeof window === "undefined" || !storageKey || messages) return;
+    try {
+      localStorage.setItem(storageKey, JSON.stringify(internal));
+    } catch {
+      /* ignore */
+    }
+  }, [internal, storageKey, messages]);
 
   // Pick the most natural-sounding voice (Edge neural voices sound human).
   useEffect(() => {
@@ -70,43 +91,58 @@ export function ChatPanel({
     };
   }, []);
 
-  const buildUtterance = (text: string) => {
-    const u = new SpeechSynthesisUtterance(text);
-    if (voiceRef.current) {
-      u.voice = voiceRef.current;
-      u.lang = voiceRef.current.lang;
-    } else {
-      u.lang = "en-US";
-    }
-    u.rate = 1.0;
-    u.pitch = 1.0;
-    return u;
-  };
-
   const speakNow = (text: string, onEnd?: () => void) => {
-    if (typeof window === "undefined" || !window.speechSynthesis) {
+    if (typeof window === "undefined" || !window.speechSynthesis || !text.trim()) {
       onEnd?.();
       return;
     }
     const synth = window.speechSynthesis;
-    synth.cancel();
-    const u = buildUtterance(text);
-    const keep = setInterval(() => {
-      if (!synth.speaking) {
-        clearInterval(keep);
-        return;
+    const run = (useDefaultVoice: boolean) => {
+      const u = new SpeechSynthesisUtterance(text);
+      if (!useDefaultVoice && voiceRef.current) {
+        u.voice = voiceRef.current;
+        u.lang = voiceRef.current.lang;
+      } else {
+        u.lang = "en-US";
       }
-      synth.resume();
-    }, 8000);
-    u.onend = () => {
-      clearInterval(keep);
-      onEnd?.();
+      u.rate = 1.0;
+      u.pitch = 1.0;
+      // Chrome/Edge silently pause long utterances (~15s) — nudge resume.
+      const keep = setInterval(() => {
+        if (!synth.speaking) {
+          clearInterval(keep);
+          return;
+        }
+        synth.resume();
+      }, 8000);
+      let done = false;
+      u.onend = () => {
+        if (done) return;
+        done = true;
+        clearInterval(keep);
+        onEnd?.();
+      };
+      u.onerror = () => {
+        clearInterval(keep);
+        if (!useDefaultVoice) {
+          run(true); // the chosen (often remote) voice failed — retry with a local one
+          return;
+        }
+        if (!done) {
+          done = true;
+          onEnd?.();
+        }
+      };
+      synth.speak(u);
     };
-    u.onerror = () => {
-      clearInterval(keep);
-      onEnd?.();
-    };
-    synth.speak(u);
+    // Calling cancel() then speak() back-to-back drops the utterance in
+    // Chrome/Edge — cancel first, then start after a short beat.
+    if (synth.speaking || synth.pending) {
+      synth.cancel();
+      setTimeout(() => run(false), 140);
+    } else {
+      run(false);
+    }
   };
 
   const speak = (text: string, onEnd?: () => void) => {

@@ -13,7 +13,17 @@ const LABEL: Record<AgentLive, string> = { working: "Working", done: "Ready", id
 export function RoomsDashboard() {
   const [status, setStatus] = useState<Record<string, AgentLive>>({});
   const [open, setOpen] = useState<AgentId | null>(null);
-  const [orchMsgs, setOrchMsgs] = useState<{ role: "you" | "agent"; text: string }[]>([]);
+  const [orchMsgs, setOrchMsgs] = useState<{ role: "you" | "agent"; text: string }[]>(
+    () => {
+      if (typeof window === "undefined") return [];
+      try {
+        const raw = localStorage.getItem("mc_chat_orchestrator");
+        return raw ? JSON.parse(raw) : [];
+      } catch {
+        return [];
+      }
+    }
+  );
 
   useEffect(() => {
     const load = () =>
@@ -24,6 +34,15 @@ export function RoomsDashboard() {
     const t = setInterval(load, 10000);
     return () => clearInterval(t);
   }, []);
+
+  // Persist the orchestrator conversation so it survives refresh / reopen.
+  useEffect(() => {
+    try {
+      localStorage.setItem("mc_chat_orchestrator", JSON.stringify(orchMsgs));
+    } catch {
+      /* ignore */
+    }
+  }, [orchMsgs]);
 
   const openSpec = open ? AGENTS.find((a) => a.id === open) ?? null : null;
 
@@ -147,6 +166,7 @@ export function RoomsDashboard() {
                 accent={openSpec.accent}
                 agentName={openSpec.name}
                 voice
+                storageKey={`mc_chat_${openSpec.id}`}
                 placeholder={`Talk to ${openSpec.name} — type or tap 🎤…`}
               />
             </div>
