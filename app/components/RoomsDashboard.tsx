@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { AGENTS } from "../../agents/registry";
 import { ChatPanel } from "./ChatPanel";
 import { Monogram } from "./Monogram";
@@ -13,17 +13,8 @@ const LABEL: Record<AgentLive, string> = { working: "Working", done: "Ready", id
 export function RoomsDashboard() {
   const [status, setStatus] = useState<Record<string, AgentLive>>({});
   const [open, setOpen] = useState<AgentId | null>(null);
-  const [orchMsgs, setOrchMsgs] = useState<{ role: "you" | "agent"; text: string }[]>(
-    () => {
-      if (typeof window === "undefined") return [];
-      try {
-        const raw = localStorage.getItem("mc_chat_orchestrator");
-        return raw ? JSON.parse(raw) : [];
-      } catch {
-        return [];
-      }
-    }
-  );
+  const [orchMsgs, setOrchMsgs] = useState<{ role: "you" | "agent"; text: string }[]>([]);
+  const orchLoadedRef = useRef(false);
 
   useEffect(() => {
     const load = () =>
@@ -35,8 +26,23 @@ export function RoomsDashboard() {
     return () => clearInterval(t);
   }, []);
 
-  // Persist the orchestrator conversation so it survives refresh / reopen.
+  // Load the saved conversation after mount (client only — avoids the SSR
+  // hydration mismatch that reading localStorage during render would cause).
   useEffect(() => {
+    if (orchLoadedRef.current) return;
+    orchLoadedRef.current = true;
+    try {
+      const raw = localStorage.getItem("mc_chat_orchestrator");
+      const parsed = raw ? JSON.parse(raw) : null;
+      if (Array.isArray(parsed) && parsed.length) setOrchMsgs(parsed);
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
+  // Persist it (skip empty so we never clobber saved history before it loads).
+  useEffect(() => {
+    if (orchMsgs.length === 0) return;
     try {
       localStorage.setItem("mc_chat_orchestrator", JSON.stringify(orchMsgs));
     } catch {

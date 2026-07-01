@@ -23,15 +23,7 @@ export function ChatPanel({
   messages?: Msg[];
   setMessages?: Dispatch<SetStateAction<Msg[]>>;
 }) {
-  const [internal, setInternal] = useState<Msg[]>(() => {
-    if (typeof window === "undefined" || !storageKey) return [];
-    try {
-      const raw = localStorage.getItem(storageKey);
-      return raw ? (JSON.parse(raw) as Msg[]) : [];
-    } catch {
-      return [];
-    }
-  });
+  const [internal, setInternal] = useState<Msg[]>([]);
   const msgs = messages ?? internal;
   const setMsgs = setMessages ?? setInternal;
   const [input, setInput] = useState("");
@@ -48,16 +40,31 @@ export function ChatPanel({
   const heardRef = useRef("");
   const sentRef = useRef(false);
   const emptyRef = useRef(0);
+  const loadedRef = useRef(false);
 
   useEffect(() => {
     const el = scrollRef.current;
     if (el) el.scrollTop = el.scrollHeight;
   }, [msgs]);
 
-  // Persist uncontrolled chats (agent channels) across reloads; controlled
-  // chats (the orchestrator) are persisted by the parent.
+  // Load persisted history AFTER mount (client only) so the first render matches
+  // the server's empty render — no hydration mismatch. Controlled chats (the
+  // orchestrator) are handled by the parent.
   useEffect(() => {
-    if (typeof window === "undefined" || !storageKey || messages) return;
+    if (loadedRef.current || messages || !storageKey || typeof window === "undefined") return;
+    loadedRef.current = true;
+    try {
+      const raw = localStorage.getItem(storageKey);
+      const parsed = raw ? JSON.parse(raw) : null;
+      if (Array.isArray(parsed) && parsed.length) setInternal(parsed);
+    } catch {
+      /* ignore */
+    }
+  }, [storageKey, messages]);
+
+  // Persist uncontrolled chats; skip empty so we never clobber saved history.
+  useEffect(() => {
+    if (!storageKey || messages || typeof window === "undefined" || internal.length === 0) return;
     try {
       localStorage.setItem(storageKey, JSON.stringify(internal));
     } catch {
@@ -134,6 +141,13 @@ export function ChatPanel({
         }
       };
       synth.speak(u);
+      // Edge's remote neural voices sometimes fail to start with no error fired —
+      // if nothing is speaking shortly after, retry with a local voice.
+      setTimeout(() => {
+        if (!done && !useDefaultVoice && !synth.speaking && !synth.pending) {
+          run(true);
+        }
+      }, 600);
     };
     // Calling cancel() then speak() back-to-back drops the utterance in
     // Chrome/Edge — cancel first, then start after a short beat.
