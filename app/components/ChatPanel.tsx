@@ -41,11 +41,18 @@ export function ChatPanel({
   const sentRef = useRef(false);
   const emptyRef = useRef(0);
   const loadedRef = useRef(false);
+  const speakOutRef = useRef(false);
 
   useEffect(() => {
     const el = scrollRef.current;
     if (el) el.scrollTop = el.scrollHeight;
   }, [msgs]);
+
+  // Mirror the voice-output toggle into a ref so async reply-speech reads the
+  // CURRENT value (not the one captured when send() was created).
+  useEffect(() => {
+    speakOutRef.current = speakOut;
+  }, [speakOut]);
 
   // Load persisted history AFTER mount (client only) so the first render matches
   // the server's empty render — no hydration mismatch. Controlled chats (the
@@ -104,7 +111,14 @@ export function ChatPanel({
       return;
     }
     const synth = window.speechSynthesis;
-    const run = (useDefaultVoice: boolean) => {
+    let done = false;
+    const finish = () => {
+      if (!done) {
+        done = true;
+        onEnd?.();
+      }
+    };
+    const say = (useDefaultVoice: boolean) => {
       const u = new SpeechSynthesisUtterance(text);
       if (!useDefaultVoice && voiceRef.current) {
         u.voice = voiceRef.current;
@@ -112,55 +126,41 @@ export function ChatPanel({
       } else {
         u.lang = "en-US";
       }
-      u.rate = 1.0;
-      u.pitch = 1.0;
+      u.rate = 1;
+      u.pitch = 1;
       // Chrome/Edge silently pause long utterances (~15s) — nudge resume.
       const keep = setInterval(() => {
-        if (!synth.speaking) {
-          clearInterval(keep);
-          return;
-        }
-        synth.resume();
-      }, 8000);
-      let done = false;
+        if (!synth.speaking) clearInterval(keep);
+        else synth.resume();
+      }, 7000);
       u.onend = () => {
-        if (done) return;
-        done = true;
         clearInterval(keep);
-        onEnd?.();
+        finish();
       };
       u.onerror = () => {
         clearInterval(keep);
-        if (!useDefaultVoice) {
-          run(true); // the chosen (often remote) voice failed — retry with a local one
-          return;
-        }
-        if (!done) {
-          done = true;
-          onEnd?.();
-        }
+        if (!useDefaultVoice) say(true);
+        else finish();
       };
       synth.speak(u);
-      // Edge's remote neural voices sometimes fail to start with no error fired —
-      // if nothing is speaking shortly after, retry with a local voice.
-      setTimeout(() => {
-        if (!done && !useDefaultVoice && !synth.speaking && !synth.pending) {
-          run(true);
-        }
-      }, 600);
     };
-    // Calling cancel() then speak() back-to-back drops the utterance in
-    // Chrome/Edge — cancel first, then start after a short beat.
-    if (synth.speaking || synth.pending) {
-      synth.cancel();
-      setTimeout(() => run(false), 140);
-    } else {
-      run(false);
-    }
+    synth.cancel();
+    say(false);
+    // If nothing is AUDIBLY speaking a moment later (Edge's neural voice can get
+    // stuck 'pending' and fire no error, or a cancel+speak race drops it),
+    // force a retry with a guaranteed local voice.
+    setTimeout(() => {
+      if (!done && !synth.speaking) {
+        synth.cancel();
+        say(true);
+      }
+    }, 900);
   };
 
   const speak = (text: string, onEnd?: () => void) => {
-    if (!speakOut && !convoRef.current) {
+    // Read from a ref so async replies use the CURRENT toggle state, not the
+    // value captured when this send() was created.
+    if (!speakOutRef.current && !convoRef.current) {
       onEnd?.();
       return;
     }
@@ -304,6 +304,7 @@ export function ChatPanel({
     setConvo(true);
     convoRef.current = true;
     setSpeakOut(true);
+    speakOutRef.current = true;
     // Greeting primes the audio inside the click gesture, then we start listening.
     speakNow("I'm listening.", () => {
       if (convoRef.current) startListening();
@@ -381,6 +382,7 @@ export function ChatPanel({
             onClick={() => {
               const next = !speakOut;
               setSpeakOut(next);
+              speakOutRef.current = next;
               if (typeof window === "undefined" || !window.speechSynthesis) return;
               if (next) {
                 const last = [...msgs].reverse().find((m) => m.role === "agent" && m.text.trim());
