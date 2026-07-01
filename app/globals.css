@@ -48,6 +48,46 @@ body {
 
 main, .above { position: relative; z-index: 1; }
 
+/* Slowly-spinning robotic globe backdrop — sits behind content, amber HUD tones. */
+.earth-bg {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  pointer-events: none;
+}
+.earth-bg::after {
+  content: "";
+  position: absolute;
+  width: min(94vh, 1060px);
+  aspect-ratio: 1;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 160, 60, 0.08);
+}
+.earth {
+  width: min(76vh, 860px);
+  aspect-ratio: 1;
+  border-radius: 50%;
+  opacity: 0.13;
+  background-color: #0b0805;
+  background-image:
+    radial-gradient(circle at 33% 28%, rgba(255, 190, 110, 0.35), rgba(255, 120, 30, 0.06) 55%, transparent 72%),
+    repeating-linear-gradient(0deg, transparent 0 27px, rgba(255, 160, 60, 0.55) 27px 28px),
+    repeating-linear-gradient(90deg, transparent 0 27px, rgba(255, 160, 60, 0.3) 27px 28px);
+  box-shadow:
+    inset -40px -30px 100px rgba(0, 0, 0, 0.92),
+    inset 24px 18px 80px rgba(255, 150, 40, 0.12),
+    0 0 140px rgba(255, 140, 40, 0.16);
+  animation: earth-spin 48s linear infinite;
+}
+@keyframes earth-spin {
+  from { background-position: 0 0, 0 0, 0 0; }
+  to   { background-position: 0 0, 0 0, 560px 0; }
+}
+
 .font-display {
   font-family: var(--font-sans), system-ui, sans-serif;
   font-weight: 600;

@@ -5,6 +5,7 @@ import { TopMenu } from "./TopMenu";
 import { RoomsDashboard } from "./RoomsDashboard";
 import { SuggestionsFeed } from "./SuggestionsFeed";
 import { LiveFeed } from "./LiveFeed";
+import { RoboticEarth } from "./RoboticEarth";
 
 export type View = "dashboard" | "inbox" | "logs";
 
@@ -16,8 +17,10 @@ export function Shell() {
   const index = ORDER.indexOf(view);
 
   return (
-    <main className="p-4 above">
-      <TopMenu view={view} onNavigate={go} />
+    <>
+      <RoboticEarth />
+      <main className="p-4 above">
+        <TopMenu view={view} onNavigate={go} />
       {/* Every view stays MOUNTED and the track slides horizontally, so a typed
           orchestrator prompt or an in-flight agent task is never lost when you
           switch tabs. We animate `left` (not a transform) so the agent modal's
@@ -45,7 +48,8 @@ export function Shell() {
           </div>
         </motion.div>
       </div>
-    </main>
+      </main>
+    </>
   );
 }
 
