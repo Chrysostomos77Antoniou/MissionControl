@@ -35,6 +35,9 @@ export function ChatPanel({
   const recRef = useRef<any>(null);
   const convoRef = useRef(false);
   const voiceRef = useRef<SpeechSynthesisVoice | null>(null);
+  const heardRef = useRef("");
+  const sentRef = useRef(false);
+  const emptyRef = useRef(0);
 
   useEffect(() => {
     const el = scrollRef.current;
@@ -165,39 +168,64 @@ export function ChatPanel({
       rec.lang = "en-US";
       rec.interimResults = true;
       rec.continuous = false;
+      heardRef.current = "";
+      sentRef.current = false;
       rec.onstart = () => {
         setListening(true);
         setVoiceErr("");
       };
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       rec.onresult = (e: any) => {
-        let interim = "";
-        let final = "";
-        for (let i = 0; i < e.results.length; i++) {
-          const r = e.results[i];
-          if (r.isFinal) final += r[0].transcript;
-          else interim += r[0].transcript;
-        }
-        setInput(final || interim);
-        if (final.trim()) {
+        let txt = "";
+        for (let i = 0; i < e.results.length; i++) txt += e.results[i][0].transcript;
+        heardRef.current = txt;
+        setInput(txt);
+        const isFinal = e.results[e.results.length - 1]?.isFinal;
+        if (isFinal && txt.trim()) {
+          sentRef.current = true;
+          emptyRef.current = 0;
           rec.stop();
-          send(final.trim());
+          send(txt.trim());
         }
       };
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       rec.onerror = (e: any) => {
         setListening(false);
         if (e.error === "not-allowed" || e.error === "service-not-allowed") {
-          setVoiceErr("Microphone blocked — click the 🔒/mic icon in the address bar, allow the microphone, then try again.");
+          setVoiceErr(
+            "Microphone blocked — allow it via the 🔒 icon in the address bar, then reload. (Edge also needs Windows ▸ Settings ▸ Privacy & security ▸ Speech ▸ Online speech recognition = On.)"
+          );
           convoRef.current = false;
           setConvo(false);
-        } else if (e.error === "no-speech") {
-          if (convoRef.current) startListening(); // keep waiting for speech
-        } else if (e.error !== "aborted") {
-          setVoiceErr("Voice error: " + e.error);
+        } else if (e.error !== "no-speech" && e.error !== "aborted") {
+          setVoiceErr("Voice input error: " + e.error);
+        }
+        // no-speech / aborted fall through to onend, which decides whether to retry.
+      };
+      rec.onend = () => {
+        setListening(false);
+        const heard = heardRef.current.trim();
+        if (!sentRef.current && heard) {
+          // Edge often never flags a result "final" — send what we heard anyway.
+          sentRef.current = true;
+          emptyRef.current = 0;
+          send(heard);
+        } else if (!sentRef.current) {
+          emptyRef.current += 1;
+          if (emptyRef.current >= 3) {
+            emptyRef.current = 0;
+            convoRef.current = false;
+            setConvo(false);
+            setVoiceErr(
+              "Didn't catch any speech. In Edge, turn ON Windows ▸ Settings ▸ Privacy & security ▸ Speech ▸ Online speech recognition — or use Chrome for voice input."
+            );
+          } else if (convoRef.current) {
+            setTimeout(() => {
+              if (convoRef.current) startListening();
+            }, 350);
+          }
         }
       };
-      rec.onend = () => setListening(false);
       recRef.current = rec;
       rec.start();
     } catch {
