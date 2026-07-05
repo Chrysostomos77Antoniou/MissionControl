@@ -19,29 +19,29 @@ export function Shell() {
   return (
     <>
       <RoboticEarth />
-      <main className="p-4 above">
+      <main className="p-4 above flex-1 min-h-0 flex flex-col overflow-hidden">
         <TopMenu view={view} onNavigate={go} />
       {/* Every view stays MOUNTED and the track slides horizontally, so a typed
           orchestrator prompt or an in-flight agent task is never lost when you
           switch tabs. We animate `left` (not a transform) so the agent modal's
           `position: fixed` keeps working. */}
-      <div className="relative overflow-hidden" style={{ minHeight: "78vh" }}>
+      <div className="relative overflow-hidden flex-1 min-h-0">
         <motion.div
-          className="flex items-start"
-          style={{ position: "relative", width: "300%" }}
+          className="flex items-stretch"
+          style={{ position: "relative", width: "300%", height: "100%" }}
           animate={{ left: `-${index * 100}%` }}
           initial={false}
           transition={{ type: "tween", ease: [0.4, 0, 0.2, 1], duration: 0.45 }}
         >
-          <div className="shrink-0" style={{ width: "33.3333%" }}>
+          <div className="shrink-0 h-full" style={{ width: "33.3333%" }}>
             <RoomsDashboard />
           </div>
-          <div className="shrink-0" style={{ width: "33.3333%" }}>
+          <div className="shrink-0 h-full" style={{ width: "33.3333%" }}>
             <Panel title="Suggestions Inbox" onBack={() => go("dashboard")}>
               <SuggestionsFeed />
             </Panel>
           </div>
-          <div className="shrink-0" style={{ width: "33.3333%" }}>
+          <div className="shrink-0 h-full" style={{ width: "33.3333%" }}>
             <Panel title="System Logs" onBack={() => go("dashboard")}>
               <LiveFeed />
             </Panel>
@@ -55,8 +55,8 @@ export function Shell() {
 
 function Panel({ title, onBack, children }: { title: string; onBack: () => void; children: React.ReactNode }) {
   return (
-    <div className="glass rounded-xl p-5 max-w-3xl mx-auto">
-      <div className="flex items-center justify-between mb-4">
+    <div className="glass rounded-xl p-5 max-w-3xl mx-auto h-full flex flex-col">
+      <div className="flex items-center justify-between mb-4 shrink-0">
         <h2 className="font-display text-sm" style={{ color: "var(--text)" }}>
           {title}
         </h2>
@@ -68,7 +68,7 @@ function Panel({ title, onBack, children }: { title: string; onBack: () => void;
           ← Back to dashboard
         </button>
       </div>
-      {children}
+      <div className="flex-1 min-h-0 overflow-y-auto">{children}</div>
     </div>
   );
 }

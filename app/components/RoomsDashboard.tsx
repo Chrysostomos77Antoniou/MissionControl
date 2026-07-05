@@ -54,7 +54,7 @@ export function RoomsDashboard() {
 
   return (
     <>
-      <div className="flex gap-4" style={{ height: "76vh" }}>
+      <div className="flex gap-4 h-full">
         {/* Agents — left rail. Click one to open a private channel. */}
         <aside className="w-[240px] shrink-0 glass rounded-xl p-3 flex flex-col overflow-y-auto">
           <div
