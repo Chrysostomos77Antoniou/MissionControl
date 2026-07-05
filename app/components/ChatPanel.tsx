@@ -4,6 +4,44 @@ import type { Dispatch, SetStateAction } from "react";
 
 type Msg = { role: "you" | "agent"; text: string };
 
+// Agent replies may still slip in markdown or dash-joined clauses despite the
+// system prompt telling them not to — clean it up defensively so the chat
+// bubble never shows literal "**"/"—" and the TTS voice never reads stray
+// punctuation out as words or pauses awkwardly on a dash.
+function stripMarkdown(text: string): string {
+  return text
+    .replace(/\*\*(.*?)\*\*/g, "$1")
+    .replace(/(?<!\*)\*([^*\n]+)\*(?!\*)/g, "$1")
+    .replace(/`([^`]*)`/g, "$1")
+    .replace(/^#{1,6}\s+/gm, "")
+    .replace(/^[-*+]\s+/gm, "")
+    .replace(/\s+[-–—]{1,2}\s+/g, ", ")
+    .replace(/,\s*,/g, ",")
+    .trim();
+}
+
+function normalizedWords(s: string): string[] {
+  return s
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, "")
+    .split(/\s+/)
+    .filter(Boolean);
+}
+
+// Barge-in listens through the speaker's own output, so on a setup without
+// headphones the mic can pick up the assistant's own voice as if it were an
+// interruption. This compares what was just heard against what the assistant
+// is currently saying — if most of the words match, it's almost certainly an
+// echo of its own speech, not you talking over it.
+function looksLikeEcho(heard: string, currentlySpeaking: string): boolean {
+  const heardWords = normalizedWords(heard);
+  if (heardWords.length < 2) return true; // too short/noisy to trust either way
+  const speakingWords = new Set(normalizedWords(currentlySpeaking));
+  if (speakingWords.size === 0) return false;
+  const overlap = heardWords.filter((w) => speakingWords.has(w)).length;
+  return overlap / heardWords.length > 0.6;
+}
+
 export function ChatPanel({
   endpoint,
   accent,
@@ -36,12 +74,25 @@ export function ChatPanel({
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const recRef = useRef<any>(null);
   const convoRef = useRef(false);
-  const voiceRef = useRef<SpeechSynthesisVoice | null>(null);
   const heardRef = useRef("");
   const sentRef = useRef(false);
   const emptyRef = useRef(0);
   const loadedRef = useRef(false);
   const speakOutRef = useRef(false);
+  // Mirrors `listening` synchronously so speakNow (which may fire from a
+  // click handler, not just conversation flow) can tell whether the mic is
+  // currently open before starting audio output.
+  const listeningRef = useRef(false);
+  // Bumped every time speech is intentionally cancelled (mute button, mic
+  // opening, stopping conversation mode) or superseded by a newer speakNow
+  // call. The in-flight retry logic checks this so a cancelled/muted
+  // utterance never falls back to reading itself out in a different (often
+  // male) voice — only a genuine synthesis failure should trigger that.
+  const speechGenRef = useRef(0);
+  // Holds the recognition session that quietly listens for you to start
+  // talking while the assistant is mid-reply (see startBargeInListener).
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const bargeInRecRef = useRef<any>(null);
 
   useEffect(() => {
     const el = scrollRef.current;
@@ -79,9 +130,18 @@ export function ChatPanel({
     }
   }, [internal, storageKey, messages]);
 
-  // Pick the most natural-sounding voice (Edge neural voices sound human).
+  // Pick a female voice, preferring the most natural-sounding one available
+  // (Edge/Windows neural voices sound human). We keep the whole sorted list
+  // of female candidates, not just the top pick, so that if the chosen voice
+  // fails to start we can fall back to another female voice instead of
+  // whatever the OS's own default happens to be (often male).
+  const femaleVoicesRef = useRef<SpeechSynthesisVoice[]>([]);
   useEffect(() => {
     if (typeof window === "undefined" || !window.speechSynthesis) return;
+    const FEMALE =
+      /female|\b(aria|jenny|jane|nancy|sara|michelle|ana|ashley|cora|elizabeth|monica|amber|libby|sonia|hazel|zira|susan|maisie|olivia|emma)\b/i;
+    const MALE =
+      /\bmale\b|\b(guy|davis|jason|tony|eric|brandon|christopher|ryan|thomas|david|mark|william|alfie)\b/i;
     const pick = () => {
       const voices = window.speechSynthesis.getVoices();
       if (!voices.length) return;
@@ -92,11 +152,16 @@ export function ChatPanel({
         if (v.lang === "en-US" || v.lang === "en-GB") s += 2;
         if (/natural|neural/.test(n)) s += 12;
         if (/google/.test(n)) s += 6;
-        if (/aria|jenny|guy|libby|sonia|ryan|emma/.test(n)) s += 3;
-        if (/zira|david|mark|hazel/.test(n)) s -= 2;
+        if (FEMALE.test(n)) s += 25;
+        if (MALE.test(n)) s -= 30;
         return s;
       };
-      voiceRef.current = [...voices].sort((a, b) => score(b) - score(a))[0] ?? null;
+      const sorted = [...voices].sort((a, b) => score(b) - score(a));
+      const female = sorted.filter((v) => FEMALE.test(v.name.toLowerCase()));
+      // Fall back to the overall best-scored voice if no female voice is
+      // installed at all, so there's still a consistent single voice rather
+      // than an unset OS default.
+      femaleVoicesRef.current = female.length ? female : sorted.slice(0, 1);
     };
     pick();
     window.speechSynthesis.onvoiceschanged = pick;
@@ -110,7 +175,23 @@ export function ChatPanel({
       onEnd?.();
       return;
     }
+    // Never let the assistant's voice play while the mic is open — that's
+    // what causes it to "hear itself" and talk over you. Whatever triggered
+    // this speech (the 🔊 button, a reply landing) wins; the mic yields.
+    if (listeningRef.current) {
+      try {
+        recRef.current?.abort?.();
+      } catch {
+        /* ignore */
+      }
+      listeningRef.current = false;
+      setListening(false);
+    }
     const synth = window.speechSynthesis;
+    // Claims this speech as the current generation — any older in-flight
+    // utterance's retry logic (below) will see it's been superseded and
+    // stop instead of falling back to a different voice.
+    const myGen = ++speechGenRef.current;
     let done = false;
     const finish = () => {
       if (!done) {
@@ -118,11 +199,15 @@ export function ChatPanel({
         onEnd?.();
       }
     };
-    const say = (useDefaultVoice: boolean) => {
+    // voiceIndex walks femaleVoicesRef: 0..length-1 are female candidates in
+    // preference order; voiceIndex === length is one last-resort attempt with
+    // no voice set (whatever the OS default is) if every female voice failed.
+    const say = (voiceIndex: number) => {
       const u = new SpeechSynthesisUtterance(text);
-      if (!useDefaultVoice && voiceRef.current) {
-        u.voice = voiceRef.current;
-        u.lang = voiceRef.current.lang;
+      const v = femaleVoicesRef.current[voiceIndex];
+      if (v) {
+        u.voice = v;
+        u.lang = v.lang;
       } else {
         u.lang = "en-US";
       }
@@ -139,32 +224,192 @@ export function ChatPanel({
       };
       u.onerror = () => {
         clearInterval(keep);
-        if (!useDefaultVoice) say(true);
-        else finish();
+        // Superseded by a mute, a mic open, or a newer reply — stop cleanly,
+        // don't retry into a different (possibly male) voice.
+        if (speechGenRef.current !== myGen) {
+          finish();
+          return;
+        }
+        if (voiceIndex < femaleVoicesRef.current.length) {
+          say(voiceIndex + 1);
+        } else {
+          finish();
+        }
       };
       synth.speak(u);
     };
     synth.cancel();
-    say(false);
+    say(0);
     // If nothing is AUDIBLY speaking a moment later (Edge's neural voice can get
     // stuck 'pending' and fire no error, or a cancel+speak race drops it),
-    // force a retry with a guaranteed local voice.
+    // force a retry with the next female candidate — unless this call has
+    // since been superseded (muted, mic opened, a newer reply started).
     setTimeout(() => {
+      if (speechGenRef.current !== myGen) return;
       if (!done && !synth.speaking) {
         synth.cancel();
-        say(true);
+        say(1);
       }
     }, 900);
   };
 
-  const speak = (text: string, onEnd?: () => void) => {
-    // Read from a ref so async replies use the CURRENT toggle state, not the
-    // value captured when this send() was created.
-    if (!speakOutRef.current && !convoRef.current) {
-      onEnd?.();
-      return;
+  const stopBargeInListener = () => {
+    try {
+      bargeInRecRef.current?.abort?.();
+    } catch {
+      /* ignore */
     }
-    speakNow(text, onEnd);
+    bargeInRecRef.current = null;
+  };
+
+  // Quietly listens in the background while the assistant is talking. If you
+  // start talking — genuinely, not just the mic picking up the speaker's own
+  // output — it fires onInterrupt so the caller can stop the assistant and
+  // switch to properly listening to you, like a real conversation instead of
+  // a strict turn-by-turn queue. Best-effort: works better with headphones,
+  // since without them the echo check below is doing real work every time.
+  const startBargeInListener = (myGen: number, getSpokenSoFar: () => string, onInterrupt: () => void) => {
+    if (typeof window === "undefined" || speechGenRef.current !== myGen) return;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (!SR) return;
+    let interrupted = false;
+    try {
+      const rec = new SR();
+      rec.lang = "en-US";
+      rec.interimResults = true;
+      rec.continuous = true;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      rec.onresult = (e: any) => {
+        if (interrupted || speechGenRef.current !== myGen) return;
+        let txt = "";
+        for (let i = e.resultIndex; i < e.results.length; i++) txt += e.results[i][0].transcript;
+        if (!txt.trim() || looksLikeEcho(txt, getSpokenSoFar())) return;
+        interrupted = true;
+        stopBargeInListener();
+        onInterrupt();
+      };
+      rec.onerror = () => {
+        /* best-effort — normal turn-taking listening still works either way */
+      };
+      rec.onend = () => {
+        // Recognition sessions can end on their own (silence, browser
+        // limits); keep it alive for as long as this speech turn still is.
+        if (!interrupted && bargeInRecRef.current === rec && speechGenRef.current === myGen) {
+          startBargeInListener(myGen, getSpokenSoFar, onInterrupt);
+        }
+      };
+      bargeInRecRef.current = rec;
+      rec.start();
+    } catch {
+      /* ignore — barge-in is a nice-to-have, not required for the turn to work */
+    }
+  };
+
+  // Starts a "speech turn": a sequence of sentence-sized chunks spoken back
+  // to back as they're enqueued, instead of waiting for the whole reply to
+  // finish streaming before saying anything. This is the difference between
+  // the voice feeling instant (starts talking as soon as the first sentence
+  // is ready) versus making you sit through the entire response in silence.
+  // Only the very first chunk goes through the cancel-then-speak race that
+  // can silently get stuck (a known Edge neural-voice quirk); later chunks
+  // are plain queued speak() calls and play naturally back to back.
+  const beginSpeechTurn = () => {
+    if (listeningRef.current) {
+      try {
+        recRef.current?.abort?.();
+      } catch {
+        /* ignore */
+      }
+      listeningRef.current = false;
+      setListening(false);
+    }
+    const synth = window.speechSynthesis;
+    const myGen = ++speechGenRef.current;
+    synth.cancel(); // clear anything left over from a superseded turn
+    let pending = 0;
+    let streamDone = false;
+    let finishedTurn = false;
+    let turnText = ""; // everything spoken so far this turn, for the echo check
+    const maybeFinishTurn = () => {
+      if (finishedTurn || !streamDone || pending > 0) return;
+      finishedTurn = true;
+      stopBargeInListener();
+      listenAfterSpeaking();
+    };
+    if (convoRef.current) {
+      startBargeInListener(myGen, () => turnText, () => {
+        speechGenRef.current++; // supersedes this turn's TTS retries too
+        synth.cancel();
+        startListening();
+      });
+    }
+    let chunkIndex = 0;
+    const enqueue = (text: string) => {
+      turnText += " " + text;
+      const isFirstChunk = chunkIndex === 0;
+      chunkIndex++;
+      pending++;
+      let doneChunk = false;
+      const finishChunk = () => {
+        if (doneChunk) return;
+        doneChunk = true;
+        pending--;
+        maybeFinishTurn();
+      };
+      const attempt = (voiceIndex: number) => {
+        if (speechGenRef.current !== myGen) {
+          finishChunk();
+          return;
+        }
+        const u = new SpeechSynthesisUtterance(text);
+        const v = femaleVoicesRef.current[voiceIndex];
+        if (v) {
+          u.voice = v;
+          u.lang = v.lang;
+        } else {
+          u.lang = "en-US";
+        }
+        u.rate = 1;
+        u.pitch = 1;
+        const keep = setInterval(() => {
+          if (!synth.speaking) clearInterval(keep);
+          else synth.resume();
+        }, 7000);
+        u.onend = () => {
+          clearInterval(keep);
+          finishChunk();
+        };
+        u.onerror = () => {
+          clearInterval(keep);
+          if (speechGenRef.current !== myGen) {
+            finishChunk();
+            return;
+          }
+          if (voiceIndex < femaleVoicesRef.current.length) attempt(voiceIndex + 1);
+          else finishChunk();
+        };
+        synth.speak(u);
+        if (isFirstChunk) {
+          setTimeout(() => {
+            if (speechGenRef.current !== myGen || doneChunk) return;
+            if (!synth.speaking) {
+              synth.cancel();
+              if (voiceIndex < femaleVoicesRef.current.length) attempt(voiceIndex + 1);
+              else finishChunk();
+            }
+          }, 900);
+        }
+      };
+      attempt(0);
+    };
+    return {
+      enqueue,
+      noMoreChunks() {
+        streamDone = true;
+        maybeFinishTurn();
+      },
+    };
   };
 
   const send = async (override?: string) => {
@@ -179,6 +424,35 @@ export function ChatPanel({
         c[c.length - 1] = { role: "agent", text };
         return c;
       });
+
+    const wantsVoice = typeof window !== "undefined" && (speakOutRef.current || convoRef.current);
+    const turn = wantsVoice ? beginSpeechTurn() : null;
+    let spokenUpTo = 0;
+    // Speaks any complete sentence(s) newly available in `fullAcc` since the
+    // last check. `flushAll` speaks whatever's left even without a trailing
+    // ./!/? — used once the stream ends, since the last sentence in a reply
+    // sometimes has no terminator by the time the model stops.
+    const maybeSpeak = (fullAcc: string, flushAll: boolean) => {
+      if (!turn) return;
+      const unspoken = fullAcc.slice(spokenUpTo);
+      if (flushAll) {
+        const chunk = stripMarkdown(unspoken).trim();
+        if (chunk) turn.enqueue(chunk);
+        spokenUpTo = fullAcc.length;
+        turn.noMoreChunks();
+        return;
+      }
+      const re = /[^.!?\n]*[.!?\n]+/g;
+      let consumed = 0;
+      while (re.exec(unspoken)) consumed = re.lastIndex;
+      if (consumed > 0) {
+        const chunk = stripMarkdown(unspoken.slice(0, consumed)).trim();
+        if (chunk) turn.enqueue(chunk);
+        spokenUpTo += consumed;
+      }
+    };
+
+    let acc = "";
     try {
       const res = await fetch(endpoint, {
         method: "POST",
@@ -188,30 +462,40 @@ export function ChatPanel({
       if (!res.ok || !res.body) throw new Error(`server ${res.status}`);
       const reader = res.body.getReader();
       const dec = new TextDecoder();
-      let acc = "";
       for (;;) {
         const { done, value } = await reader.read();
         if (done) break;
         acc += dec.decode(value);
         setLast(acc);
+        maybeSpeak(acc, false);
       }
-      // Speak the reply; in conversation mode, listen again once it finishes.
-      speak(acc, () => {
-        if (convoRef.current) startListening();
-      });
     } catch {
       setLast("⚠ Could not reach the agent. Check that the app and Anthropic credits are available.");
     } finally {
+      maybeSpeak(acc, true);
+      if (!turn) listenAfterSpeaking();
       setBusy(false);
     }
   };
 
   const startListening = () => {
+    // Don't stack a second recognition session on top of an active one — that
+    // produces exactly the confused "doesn't listen" behavior (two sessions
+    // racing to report results).
+    if (listeningRef.current) return;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
     if (!SR) {
       setVoiceErr("Voice input needs Chrome or Edge.");
       return;
+    }
+    // Belt-and-suspenders: make sure the assistant isn't still mid-utterance
+    // (its own voice bleeding into the mic through the speaker is the other
+    // half of the "hears itself" problem). Bump the generation first so this
+    // cancellation doesn't trigger speakNow's own retry-into-another-voice.
+    if (typeof window !== "undefined") {
+      speechGenRef.current++;
+      window.speechSynthesis?.cancel();
     }
     try {
       const rec = new SR();
@@ -221,6 +505,7 @@ export function ChatPanel({
       heardRef.current = "";
       sentRef.current = false;
       rec.onstart = () => {
+        listeningRef.current = true;
         setListening(true);
         setVoiceErr("");
       };
@@ -240,6 +525,7 @@ export function ChatPanel({
       };
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       rec.onerror = (e: any) => {
+        listeningRef.current = false;
         setListening(false);
         if (e.error === "not-allowed" || e.error === "service-not-allowed") {
           setVoiceErr(
@@ -253,6 +539,7 @@ export function ChatPanel({
         // no-speech / aborted fall through to onend, which decides whether to retry.
       };
       rec.onend = () => {
+        listeningRef.current = false;
         setListening(false);
         const heard = heardRef.current.trim();
         if (!sentRef.current && heard) {
@@ -286,13 +573,28 @@ export function ChatPanel({
   const stopConvo = () => {
     convoRef.current = false;
     setConvo(false);
+    listeningRef.current = false;
     setListening(false);
+    stopBargeInListener();
     try {
       recRef.current?.abort?.();
     } catch {
       /* ignore */
     }
-    if (typeof window !== "undefined") window.speechSynthesis?.cancel();
+    if (typeof window !== "undefined") {
+      speechGenRef.current++;
+      window.speechSynthesis?.cancel();
+    }
+  };
+
+  // Wait a beat after the assistant stops talking before opening the mic —
+  // without this gap, the tail of its own voice (still resonating out of the
+  // speaker) is the first thing the mic hears, which either produces a
+  // garbage transcript or ends the session before you get a word in.
+  const listenAfterSpeaking = () => {
+    setTimeout(() => {
+      if (convoRef.current) startListening();
+    }, 500);
   };
 
   const toggleConvo = () => {
@@ -306,9 +608,7 @@ export function ChatPanel({
     setSpeakOut(true);
     speakOutRef.current = true;
     // Greeting primes the audio inside the click gesture, then we start listening.
-    speakNow("I'm listening.", () => {
-      if (convoRef.current) startListening();
-    });
+    speakNow("I'm listening.", listenAfterSpeaking);
   };
 
   const btn = "shrink-0 w-9 h-9 rounded-lg flex items-center justify-center text-base transition";
@@ -340,7 +640,7 @@ export function ChatPanel({
                 className="text-sm leading-relaxed whitespace-pre-wrap rounded-2xl rounded-bl-sm px-3 py-2"
                 style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--text)" }}
               >
-                {m.text || "…"}
+                {stripMarkdown(m.text) || "…"}
               </div>
             </div>
           )
@@ -349,7 +649,8 @@ export function ChatPanel({
 
       {voice && (voiceErr || convo) && (
         <div className="text-[11px] mb-2 px-1" style={{ color: voiceErr ? "#ff6b6b" : accent }}>
-          {voiceErr || (listening ? "🎙️ Listening — speak now…" : busy ? "Thinking…" : "🔊 Speaking…")}
+          {voiceErr ||
+            (listening ? "🎙️ Listening — speak now…" : busy ? "Thinking…" : "🔊 Speaking — talk anytime to interrupt…")}
         </div>
       )}
 
@@ -386,8 +687,12 @@ export function ChatPanel({
               if (typeof window === "undefined" || !window.speechSynthesis) return;
               if (next) {
                 const last = [...msgs].reverse().find((m) => m.role === "agent" && m.text.trim());
-                speakNow(last ? last.text : "Voice on.");
+                speakNow(last ? stripMarkdown(last.text) : "Voice on.");
               } else {
+                // Muting must mean silence — bump the generation first so
+                // this cancellation can't trigger a fallback retry into a
+                // different voice speaking right as you mute it.
+                speechGenRef.current++;
                 window.speechSynthesis.cancel();
               }
             }}

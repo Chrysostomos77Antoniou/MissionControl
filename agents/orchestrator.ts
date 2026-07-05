@@ -32,9 +32,11 @@ function dispatch(scope: string): string {
   return `Unknown target "${scope}". Use "all", a cadence group (hourly / 4h / daily / 5day), or an agent id.`;
 }
 
-// A streaming chat that can also call tools. Tool calls are resolved in a short
-// loop (the handler returns a summary string), then the model's final reply is
-// streamed back to the client.
+// A streaming chat that can also call tools. Uses the real Anthropic streaming
+// API so text reaches the client as it's generated (rather than blocking for a
+// full turn) — this both feels faster and avoids sitting blocked near the
+// platform's function-duration ceiling. Tool calls are resolved in a short
+// loop (the handler returns a summary string) between streamed turns.
 function streamWithTools(
   system: string,
   userMessage: string,
@@ -49,19 +51,20 @@ function streamWithTools(
           { role: "user", content: userMessage },
         ];
         for (let turn = 0; turn < 4; turn++) {
-          const resp = await anthropic.messages.create({
+          const stream = anthropic.messages.stream({
             model: HAIKU,
             max_tokens: 1500,
             system,
             tools,
             messages,
           });
-          await recordUsage(HAIKU, resp.usage);
-          for (const block of resp.content) {
-            if (block.type === "text" && block.text) {
-              controller.enqueue(encoder.encode(block.text));
+          for await (const event of stream) {
+            if (event.type === "content_block_delta" && event.delta.type === "text_delta") {
+              controller.enqueue(encoder.encode(event.delta.text));
             }
           }
+          const resp = await stream.finalMessage();
+          await recordUsage(HAIKU, resp.usage);
           if (resp.stop_reason !== "tool_use") break;
           messages.push({ role: "assistant", content: resp.content });
           const results: Anthropic.ToolResultBlockParam[] = [];
@@ -98,7 +101,9 @@ export async function streamAgentChat(
   const spec = AGENT_BY_ID[agentId];
   const system = `${spec.system}
 
-You are in a private chat with the FootRank owner. Answer conversationally and concretely from your area of expertise. If the owner asks you to run, work, analyse, or produce suggestions NOW, call run_my_analysis (it runs in the background and posts to the inbox). Otherwise, just talk.`;
+You are in a private chat with the FootRank owner. Answer conversationally and concretely from your area of expertise. If the owner asks you to run, work, analyse, or produce suggestions NOW, call run_my_analysis (it runs in the background and posts to the inbox). Otherwise, just talk.
+
+${PLAIN_TEXT_NOTE}`;
   const tool: Anthropic.Tool = {
     name: "run_my_analysis",
     description:
@@ -114,13 +119,26 @@ You are in a private chat with the FootRank owner. Answer conversationally and c
   });
 }
 
+// Chat replies are read aloud via text-to-speech and spoken sentence-by-
+// sentence as they stream, so both HOW they're written (no markdown, no
+// dash-joined clauses) and HOW MUCH is written (short, like a real back-
+// and-forth, not a report) directly determine how natural the conversation
+// feels and how fast the voice actually starts and finishes talking.
+const PLAIN_TEXT_NOTE = `Reply in plain conversational text only, written to sound smooth when read aloud. Never use markdown syntax: no bold with asterisks, no hash headings, no backtick code, no bullet dashes or numbered-list markers, no underscores for emphasis. Do not join clauses with a dash or double-dash either; instead write two full sentences, or connect them with a comma or the word "and"/"which". If you need to list things, use short plain sentences like "First, ... Then, ... Finally, ..." instead of a bulleted list.
+
+Keep it short by default: 2 to 4 sentences for a normal exchange, the way you'd actually talk on a phone call, not a written report. If there's genuinely a lot of ground to cover, give the single most important headline first, then ask whether the owner wants you to go through the rest — don't front-load everything into one long reply. Only give a full detailed rundown when the owner explicitly asks for a full status report, a complete list, or similar.
+
+This all matters because every reply is read aloud via text-to-speech as it's generated, sentence by sentence — stray punctuation breaks the flow or gets read out as a word, and a long reply means a long wait before the owner can speak again.`;
+
 const ORCH_SYSTEM = `You are the Chief Orchestrator of FootRank Mission Control — the single point of contact between the owner and a team of 12 specialist agents (Engineering, Developer, QA, Cybersecurity, DevOps & Reliability, UX/Design, Marketing, Growth, Data, Community & Trust/Safety, Competitive Intel, Monetization).
 
 Every agent reports its findings up to you; you review and verify them before anything reaches the owner. You have full live awareness of the team's current state (provided below).
 
 You can ACTUALLY dispatch the team: when the owner asks you to run, kick off, or dispatch the agents (all of them, a group, or one specific agent), call the run_agents tool, then confirm exactly what you dispatched and that results will appear in the inbox.
 
-When the owner asks for status, give a clear executive summary: what each active agent found, what's in progress (including QA test/fix loops), what needs the owner's attention or approval, and your own assessment — flag anything risky, contradictory, or low-quality. Be concise, direct, and professional. No preamble.`;
+When the owner explicitly asks for a full status report, give a clear executive summary: what each active agent found, what's in progress (including QA test/fix loops), what needs the owner's attention or approval, and your own assessment — flag anything risky, contradictory, or low-quality. For a normal back-and-forth, answer the actual question directly and briefly instead — you can always offer to go into more detail. Be direct and professional. No preamble.
+
+${PLAIN_TEXT_NOTE}`;
 
 export async function streamChat(userMessage: string): Promise<ReadableStream> {
   const briefing = await getOrchestratorBriefing();
