@@ -2,16 +2,21 @@ import { runAgentLoop } from "./run-loop";
 import { SONNET } from "../lib/anthropic";
 import { AGENTS, AGENT_BY_ID, type AgentSpec } from "./registry";
 import { toolsFor, handlerToolsFor } from "../tools/registry";
-import { recentMemory, writeMemory, logActivity } from "../lib/memory";
-import { recordResult } from "../lib/suggestions";
+import { writeMemory, logActivity } from "../lib/memory";
+import { recordResult, openSuggestionsForAgent } from "../lib/suggestions";
 import { withinBudget } from "../lib/usage";
 import type { AgentId, Cadence, Suggestion } from "../lib/types";
 
 export async function runAgent(spec: AgentSpec): Promise<string> {
-  const memory = await recentMemory(spec.id, 5);
-  const userMessage = `Recent suggestions you already made (do NOT repeat):\n${
-    memory.map((m) => `- ${m.summary}`).join("\n") || "none"
-  }\n\nRun your review now and save concrete suggestions.`;
+  // The real, accurate signal for what's still unresolved — not a fuzzy
+  // memory of what the agent last happened to write. A still-open finding
+  // doesn't need re-saving; that's what made every cycle look "different"
+  // even when the underlying picture hadn't actually changed.
+  const open = await openSuggestionsForAgent(spec.id);
+  const openList = open.length
+    ? open.map((s) => `- (${s.priority}) ${s.title}`).join("\n")
+    : "none — your inbox is currently clear";
+  const userMessage = `Your own findings currently OPEN and unresolved in the owner's inbox:\n${openList}\n\nDo not save a duplicate of any of these. If the evidence still supports one, that's fine and expected — it's already pending, leave it as-is. Only save something new if it's a genuinely distinct problem, or a material update to one of the above (say so explicitly if it's an update). Run your review now per your standard procedure.`;
 
   const { text } = await runAgentLoop({
     agent: spec.id,
@@ -19,8 +24,8 @@ export async function runAgent(spec: AgentSpec): Promise<string> {
     userMessage,
     tools: toolsFor(spec.id),
     maxTurns: 12,
-    model: SONNET, // lighter suggestion-generation runs on Sonnet
-    effort: "low", // minimal thinking — cheapest for routine scans
+    model: SONNET,
+    effort: "high", // deep analysis before concluding, not a quick scan
   });
   await writeMemory(spec.id, text.slice(0, 500));
   return text;

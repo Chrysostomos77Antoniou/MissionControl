@@ -22,6 +22,21 @@ export async function listSuggestions(
   return (data ?? []) as Suggestion[];
 }
 
+// This agent's own currently-unresolved findings — the real, accurate
+// dedup signal for a cycle run (unlike a fuzzy memory of what it last wrote).
+// A still-open suggestion doesn't need to be re-saved; only a genuinely new
+// or materially-changed finding does.
+export async function openSuggestionsForAgent(agent: AgentId): Promise<Suggestion[]> {
+  const { data } = await supabaseAdmin
+    .from("suggestions")
+    .select("*")
+    .eq("agent", agent)
+    .eq("status", "new")
+    .order("created_at", { ascending: false })
+    .limit(15);
+  return (data ?? []) as Suggestion[];
+}
+
 export async function getSuggestion(id: string): Promise<Suggestion | null> {
   const { data } = await supabaseAdmin.from("suggestions").select("*").eq("id", id).single();
   return (data as Suggestion) ?? null;
