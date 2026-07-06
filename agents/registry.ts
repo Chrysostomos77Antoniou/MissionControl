@@ -1,3 +1,4 @@
+import { HAIKU } from "../lib/models";
 import type { AgentId, Cadence } from "../lib/types";
 
 export interface AgentSpec {
@@ -6,6 +7,13 @@ export interface AgentSpec {
   accent: string;
   cadence: Cadence;
   system: string;
+  // Per-agent model override. Unset = the caller's default (Sonnet for
+  // suggestion-generation runs). Only set this for agents whose job is
+  // low-stakes brainstorming/research (no live DB/code verification) —
+  // agents that must verify claims against real data should stay on the
+  // default, since a weaker model is more likely to hallucinate a
+  // confidently-wrong "fix".
+  model?: string;
 }
 
 // Shared operating standard appended to every agent — raises the bar to
@@ -86,6 +94,7 @@ Evaluate against Nielsen's usability heuristics and modern mobile patterns: info
     name: "Marketing",
     accent: "#f97316",
     cadence: "daily",
+    model: HAIKU, // low-stakes brainstorming, no live DB/code verification
     system: `You are a growth marketer and short-form content strategist who has scaled sports/community apps. FootRank is a football match-tracking & ranking app (amateur 5-a-side, Cyprus-first).
 
 Each run: web_search current football & short-form trends, then propose campaign angles and platform-native SHORT-FORM VIDEO/REEL/TIKTOK/SHORTS concepts. For each video idea give: a scroll-stopping hook (first 2 seconds), a shot list, on-screen text, and a caption — tag these category 'video-idea'. Use proven structures (hook → tension → payoff; AIDA) and lean into community-led, locally-relevant, identity-driven angles ("settle it on the pitch", rivalry, leaderboards, banter). Keep it realistic for a solo founder filming on a phone. The owner films and posts everything themselves — you only strategise. ${ADVISORY}`,
@@ -122,6 +131,7 @@ Each run: read_footrank_stats and db_read (watch behavior_reports, disputes, att
     name: "Competitive Intel",
     accent: "#0891b2",
     cadence: "daily",
+    model: HAIKU, // low-stakes web research + positioning, no live DB/code verification
     system: `You are a competitive & market strategist.
 
 Each run: web_search rival and adjacent apps (Playtomic, Spond, TeamSnap, Sporteasy, local 5-a-side/futsal and pickup-sports apps) and market trends. Produce sharp positioning analysis: where FootRank differentiates (ELO-style ranking for amateurs, opponent discovery), competitors' strengths/weaknesses, and concrete gaps or threats. Use SWOT and jobs-to-be-done thinking. Prioritise the few moves that widen FootRank's wedge in the amateur-football niche — not feature-parity checklists. Cite the sources you found. ${ADVISORY}`,
@@ -131,6 +141,7 @@ Each run: web_search rival and adjacent apps (Playtomic, Spond, TeamSnap, Sporte
     name: "Monetization",
     accent: "#84cc16",
     cadence: "daily",
+    model: HAIKU, // strategy/pricing judgement; still touches db_read for usage stats, so watch this one closest of the three
     system: `You are a monetisation & pricing strategist for consumer apps.
 
 Each run: read_footrank_stats / db_read for the real usage picture and web_search comparable apps' pricing. Apply value-based pricing and freemium design (van Westendorp / willingness-to-pay thinking) tuned to the LOCAL market (Cyprus) and the app's stage. Crucial expert judgement: monetising too early kills early-stage growth — if the right answer is "not yet, grow the base first", say so plainly and explain the trigger conditions to revisit. When you do propose revenue, name the premium feature, the price point, who pays, and why they'd value it. ${ADVISORY}`,

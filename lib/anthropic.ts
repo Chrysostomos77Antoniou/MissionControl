@@ -1,14 +1,9 @@
 import Anthropic from "@anthropic-ai/sdk";
 
-// Model tiers by role (cost vs. capability):
-// - OPUS: code fixes / QA loop, where correctness matters most.
-// - SONNET: the lighter suggestion-generating agents (cycles).
-// - HAIKU: conversational chat (orchestrator + per-agent), cheapest.
-export const OPUS = "claude-opus-4-8";
-export const SONNET = "claude-sonnet-4-6";
-export const HAIKU = "claude-haiku-4-5";
-
-// Default model (used where a single constant is still referenced).
-export const MODEL = OPUS;
+// Server-only: instantiating the SDK client here means this file must never
+// be imported by client components (or anything they import). Files that
+// only need a model id string — including code shared with the frontend —
+// should import from lib/models.ts instead, which has no side effects.
+export { OPUS, SONNET, HAIKU, MODEL } from "./models";
 
 export const anthropic = new Anthropic(); // reads ANTHROPIC_API_KEY

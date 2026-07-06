@@ -24,7 +24,7 @@ export async function runAgent(spec: AgentSpec): Promise<string> {
     userMessage,
     tools: toolsFor(spec.id),
     maxTurns: 12,
-    model: SONNET,
+    model: spec.model ?? SONNET, // per-agent override for low-stakes agents (see registry.ts)
     effort: "high", // deep analysis before concluding, not a quick scan
   });
   await writeMemory(spec.id, text.slice(0, 500));

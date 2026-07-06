@@ -1,5 +1,5 @@
 import type Anthropic from "@anthropic-ai/sdk";
-import { anthropic, OPUS } from "../lib/anthropic";
+import { anthropic, OPUS, HAIKU } from "../lib/anthropic";
 import { dispatchTool } from "../tools/registry";
 import { recordUsage, flagApiError } from "../lib/usage";
 import { logActivity } from "../lib/memory";
@@ -30,18 +30,23 @@ export async function runAgentLoop(opts: {
       .map((b) => b.text)
       .join("\n");
 
+  // Haiku doesn't support extended/adaptive thinking OR the effort control
+  // (both 400 if sent) — only request them for models that actually support
+  // them.
+  const supportsThinkingControls = model !== HAIKU;
+
   for (let turn = 0; turn < maxTurns; turn++) {
     let response;
     try {
       response = await anthropic.messages.create({
         model,
         max_tokens: 8000,
-        thinking: { type: "adaptive" },
+        ...(supportsThinkingControls ? { thinking: { type: "adaptive" } } : {}),
         // Cache the (stable) system prompt + tool definitions so every turn in
         // the loop — and repeat runs of the same agent — read them at ~10% cost.
         cache_control: { type: "ephemeral" },
         // Lower thinking effort on routine agents to cut token spend.
-        ...(effort ? { output_config: { effort } } : {}),
+        ...(effort && supportsThinkingControls ? { output_config: { effort } } : {}),
         system,
         tools,
         messages,
