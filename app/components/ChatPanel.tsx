@@ -253,13 +253,32 @@ export function ChatPanel({
     }, 900);
   };
 
-  const stopBargeInListener = () => {
-    try {
-      bargeInRecRef.current?.abort?.();
-    } catch {
-      /* ignore */
-    }
+  // Stops the barge-in listener and resolves once its recognition session has
+  // actually finished tearing down — not just "we called abort". Starting a
+  // new recognition session (the real listening turn) before the browser has
+  // released the previous one is what made the second voice turn silently
+  // fail: the speech service was still busy with the barge-in session.
+  const stopBargeInListener = (): Promise<void> => {
+    const rec = bargeInRecRef.current;
     bargeInRecRef.current = null;
+    if (!rec) return Promise.resolve();
+    return new Promise((resolve) => {
+      let done = false;
+      const finish = () => {
+        if (done) return;
+        done = true;
+        resolve();
+      };
+      rec.onend = finish;
+      rec.onerror = finish;
+      try {
+        rec.abort();
+      } catch {
+        finish();
+      }
+      // Safety net in case neither event fires for some reason.
+      setTimeout(finish, 300);
+    });
   };
 
   // Quietly listens in the background while the assistant is talking. If you
@@ -286,8 +305,7 @@ export function ChatPanel({
         for (let i = e.resultIndex; i < e.results.length; i++) txt += e.results[i][0].transcript;
         if (!txt.trim() || looksLikeEcho(txt, getSpokenSoFar())) return;
         interrupted = true;
-        stopBargeInListener();
-        onInterrupt();
+        stopBargeInListener().then(onInterrupt);
       };
       rec.onerror = () => {
         /* best-effort — normal turn-taking listening still works either way */
@@ -334,15 +352,23 @@ export function ChatPanel({
     const maybeFinishTurn = () => {
       if (finishedTurn || !streamDone || pending > 0) return;
       finishedTurn = true;
-      stopBargeInListener();
-      listenAfterSpeaking();
+      // Wait for the barge-in session to actually finish tearing down before
+      // opening the real mic again — starting it too early is what made the
+      // second voice turn silently fail.
+      stopBargeInListener().then(() => listenAfterSpeaking());
     };
+    // Give the just-finished listening session a moment to actually release
+    // before requesting a new recognition stream for barge-in — starting one
+    // immediately after aborting another is the other half of that same race.
     if (convoRef.current) {
-      startBargeInListener(myGen, () => turnText, () => {
-        speechGenRef.current++; // supersedes this turn's TTS retries too
-        synth.cancel();
-        startListening();
-      });
+      setTimeout(() => {
+        if (speechGenRef.current !== myGen) return;
+        startBargeInListener(myGen, () => turnText, () => {
+          speechGenRef.current++; // supersedes this turn's TTS retries too
+          synth.cancel();
+          startListening();
+        });
+      }, 400);
     }
     let chunkIndex = 0;
     const enqueue = (text: string) => {
@@ -501,9 +527,35 @@ export function ChatPanel({
       const rec = new SR();
       rec.lang = "en-US";
       rec.interimResults = true;
-      rec.continuous = false;
+      // continuous: true — a plain single-utterance session (continuous:
+      // false) ends the moment the engine detects ANY pause, which is far
+      // too aggressive for natural speech (a breath, a "let me think") and
+      // is why it was cutting you off mid-sentence. We manage our own
+      // "you've actually gone quiet" timer below instead.
+      rec.continuous = true;
       heardRef.current = "";
       sentRef.current = false;
+      let silenceTimer: ReturnType<typeof setTimeout> | null = null;
+      const clearSilenceTimer = () => {
+        if (silenceTimer) {
+          clearTimeout(silenceTimer);
+          silenceTimer = null;
+        }
+      };
+      const finishAndSend = () => {
+        if (sentRef.current) return;
+        const heard = heardRef.current.trim();
+        if (!heard) return;
+        sentRef.current = true;
+        emptyRef.current = 0;
+        clearSilenceTimer();
+        try {
+          rec.stop();
+        } catch {
+          /* ignore */
+        }
+        send(heard);
+      };
       rec.onstart = () => {
         listeningRef.current = true;
         setListening(true);
@@ -517,14 +569,18 @@ export function ChatPanel({
         setInput(txt);
         const isFinal = e.results[e.results.length - 1]?.isFinal;
         if (isFinal && txt.trim()) {
-          sentRef.current = true;
-          emptyRef.current = 0;
-          rec.stop();
-          send(txt.trim());
+          finishAndSend();
+          return;
         }
+        // Still going — push the "you've gone quiet" deadline out so a
+        // mid-sentence pause doesn't end the turn early. Only real silence
+        // (no new words for 1.8s) counts as done.
+        clearSilenceTimer();
+        silenceTimer = setTimeout(finishAndSend, 1800);
       };
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       rec.onerror = (e: any) => {
+        clearSilenceTimer();
         listeningRef.current = false;
         setListening(false);
         if (e.error === "not-allowed" || e.error === "service-not-allowed") {
@@ -539,6 +595,7 @@ export function ChatPanel({
         // no-speech / aborted fall through to onend, which decides whether to retry.
       };
       rec.onend = () => {
+        clearSilenceTimer();
         listeningRef.current = false;
         setListening(false);
         const heard = heardRef.current.trim();
