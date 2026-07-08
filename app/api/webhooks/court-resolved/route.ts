@@ -24,16 +24,27 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "missing match_id" }, { status: 400 });
   }
 
-  const when = body.scheduled_at
-    ? new Date(body.scheduled_at).toLocaleString("en-GB", { timeZone: "Asia/Nicosia" })
-    : "an upcoming match";
+  const scheduled = body.scheduled_at ? new Date(body.scheduled_at) : null;
+  const dateStr = scheduled
+    ? scheduled.toLocaleDateString("en-GB", { timeZone: "Asia/Nicosia" })
+    : "TBD";
+  const timeStr = scheduled
+    ? scheduled.toLocaleTimeString("en-GB", {
+        timeZone: "Asia/Nicosia",
+        hour: "2-digit",
+        minute: "2-digit",
+        hour12: false,
+      })
+    : "TBD";
   const homeTeam = body.home_team ?? "Home";
   const awayTeam = body.away_team ?? "Away";
   const courtPhone = body.court_phone ?? "no phone on file";
 
   const lines = [
     `📞 Book a court: ${homeTeam} vs ${awayTeam}`,
-    `${body.city ?? "?"} · ${when}`,
+    `${body.city ?? "?"}`,
+    `DATE: ${dateStr}`,
+    `HOUR: ${timeStr}`,
     "",
     captainLine(homeTeam, body.home_captain_name, body.home_captain_phone, body.home_captain_email),
     captainLine(awayTeam, body.away_captain_name, body.away_captain_phone, body.away_captain_email),
