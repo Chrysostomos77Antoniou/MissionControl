@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { AGENTS } from "../../agents/registry";
 import { ChatPanel } from "./ChatPanel";
 import { Monogram } from "./Monogram";
-import { apiGet } from "../../lib/api";
+import { apiGet, apiPost } from "../../lib/api";
 import type { AgentLive } from "../../lib/agent-status";
 import type { AgentId } from "../../lib/types";
 
@@ -15,6 +15,28 @@ export function RoomsDashboard() {
   const [open, setOpen] = useState<AgentId | null>(null);
   const [orchMsgs, setOrchMsgs] = useState<{ role: "you" | "agent"; text: string }[]>([]);
   const orchLoadedRef = useRef(false);
+  const [selected, setSelected] = useState<Set<AgentId>>(new Set());
+  const [running, setRunning] = useState(false);
+
+  const toggleSelected = (id: AgentId) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const runSelected = async () => {
+    if (selected.size === 0 || running) return;
+    setRunning(true);
+    await apiPost("/api/agents/run", { ids: Array.from(selected) });
+    setRunning(false);
+    setSelected(new Set());
+    apiGet<Record<string, AgentLive>>("/api/agent-status").then((d) => {
+      if (d) setStatus(d);
+    });
+  };
 
   useEffect(() => {
     const load = () =>
@@ -57,43 +79,70 @@ export function RoomsDashboard() {
       <div className="flex gap-4 h-full">
         {/* Agents — left rail. Click one to open a private channel. */}
         <aside className="w-[240px] shrink-0 glass rounded-xl p-3 flex flex-col overflow-y-auto">
-          <div
-            className="font-display text-[11px] mb-2.5 px-1 uppercase tracking-wider"
-            style={{ color: "var(--text-dim)" }}
-          >
-            Agents · {AGENTS.length}
+          <div className="flex items-center justify-between mb-2.5 px-1">
+            <div
+              className="font-display text-[11px] uppercase tracking-wider"
+              style={{ color: "var(--text-dim)" }}
+            >
+              Agents · {AGENTS.length}
+            </div>
+            <button
+              onClick={runSelected}
+              disabled={selected.size === 0 || running}
+              className="text-[10px] px-2 py-0.5 rounded font-display"
+              style={{
+                background: "var(--surface)",
+                border: "1px solid var(--border)",
+                color: selected.size === 0 || running ? "var(--text-dim)" : "#00ff88",
+              }}
+            >
+              {running ? "Running…" : `▶ Run (${selected.size})`}
+            </button>
           </div>
           <div className="space-y-1.5">
             {AGENTS.map((spec) => {
               const st = status[spec.id] ?? "idle";
+              const checked = selected.has(spec.id);
               return (
-                <button
+                <div
                   key={spec.id}
-                  onClick={() => setOpen(spec.id)}
-                  className="w-full flex items-center gap-2.5 px-2 py-2 rounded-lg text-left transition hover:brightness-125"
+                  className="w-full flex items-center gap-2 px-2 py-2 rounded-lg transition hover:brightness-125"
                   style={{
                     border: "1px solid var(--border)",
                     background: `color-mix(in srgb, ${spec.accent} 7%, transparent)`,
                   }}
                 >
-                  <Monogram name={spec.name} accent={spec.accent} size={30} />
-                  <div className="min-w-0 flex-1">
-                    <div className="text-xs font-semibold truncate" style={{ color: "var(--text)" }}>
-                      {spec.name}
-                    </div>
-                    <div className="text-[10px] truncate" style={{ color: "var(--text-dim)" }}>
-                      {LABEL[st]}
-                    </div>
-                  </div>
-                  <span
-                    className="w-2.5 h-2.5 rounded-full shrink-0"
-                    style={{
-                      background: DOT[st],
-                      boxShadow: st === "working" ? `0 0 7px ${DOT[st]}` : "none",
-                      animation: st === "working" ? "pulse 1.3s infinite" : "none",
-                    }}
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    onChange={() => toggleSelected(spec.id)}
+                    onClick={(e) => e.stopPropagation()}
+                    className="shrink-0 w-3.5 h-3.5"
+                    title={`Select ${spec.name} to run manually`}
                   />
-                </button>
+                  <button
+                    onClick={() => setOpen(spec.id)}
+                    className="flex-1 min-w-0 flex items-center gap-2.5 text-left"
+                  >
+                    <Monogram name={spec.name} accent={spec.accent} size={30} />
+                    <div className="min-w-0 flex-1">
+                      <div className="text-xs font-semibold truncate" style={{ color: "var(--text)" }}>
+                        {spec.name}
+                      </div>
+                      <div className="text-[10px] truncate" style={{ color: "var(--text-dim)" }}>
+                        {LABEL[st]}
+                      </div>
+                    </div>
+                    <span
+                      className="w-2.5 h-2.5 rounded-full shrink-0"
+                      style={{
+                        background: DOT[st],
+                        boxShadow: st === "working" ? `0 0 7px ${DOT[st]}` : "none",
+                        animation: st === "working" ? "pulse 1.3s infinite" : "none",
+                      }}
+                    />
+                  </button>
+                </div>
               );
             })}
           </div>
