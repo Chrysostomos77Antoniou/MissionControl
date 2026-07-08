@@ -69,6 +69,7 @@ export function ChatPanel({
   const [listening, setListening] = useState(false);
   const [convo, setConvo] = useState(false); // hands-free conversation mode
   const [speakOut, setSpeakOut] = useState(false);
+  const [speaking, setSpeaking] = useState(false);
   const [voiceErr, setVoiceErr] = useState("");
   const scrollRef = useRef<HTMLDivElement>(null);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -93,6 +94,10 @@ export function ChatPanel({
   // talking while the assistant is mid-reply (see startBargeInListener).
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const bargeInRecRef = useRef<any>(null);
+  // Lets the Stop button cancel an in-flight request outright (not just mute
+  // the voice) — without this, a slow/hung agent reply had no way to abandon.
+  const abortRef = useRef<AbortController | null>(null);
+  const speakingRef = useRef(false);
 
   useEffect(() => {
     const el = scrollRef.current;
@@ -192,10 +197,16 @@ export function ChatPanel({
     // utterance's retry logic (below) will see it's been superseded and
     // stop instead of falling back to a different voice.
     const myGen = ++speechGenRef.current;
+    speakingRef.current = true;
+    setSpeaking(true);
     let done = false;
     const finish = () => {
       if (!done) {
         done = true;
+        if (speechGenRef.current === myGen) {
+          speakingRef.current = false;
+          setSpeaking(false);
+        }
         onEnd?.();
       }
     };
@@ -345,6 +356,8 @@ export function ChatPanel({
     const synth = window.speechSynthesis;
     const myGen = ++speechGenRef.current;
     synth.cancel(); // clear anything left over from a superseded turn
+    speakingRef.current = true;
+    setSpeaking(true);
     let pending = 0;
     let streamDone = false;
     let finishedTurn = false;
@@ -352,6 +365,10 @@ export function ChatPanel({
     const maybeFinishTurn = () => {
       if (finishedTurn || !streamDone || pending > 0) return;
       finishedTurn = true;
+      if (speechGenRef.current === myGen) {
+        speakingRef.current = false;
+        setSpeaking(false);
+      }
       // Wait for the barge-in session to actually finish tearing down before
       // opening the real mic again — starting it too early is what made the
       // second voice turn silently fail.
@@ -478,12 +495,16 @@ export function ChatPanel({
       }
     };
 
+    const controller = new AbortController();
+    abortRef.current = controller;
     let acc = "";
+    let aborted = false;
     try {
       const res = await fetch(endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ message: q }),
+        signal: controller.signal,
       });
       if (!res.ok || !res.body) throw new Error(`server ${res.status}`);
       const reader = res.body.getReader();
@@ -496,12 +517,43 @@ export function ChatPanel({
         maybeSpeak(acc, false);
       }
     } catch {
-      setLast("⚠ Could not reach the agent. Check that the app and Anthropic credits are available.");
+      if (controller.signal.aborted) {
+        aborted = true;
+      } else {
+        setLast("⚠ Could not reach the agent. Check that the app and Anthropic credits are available.");
+      }
     } finally {
-      maybeSpeak(acc, true);
-      if (!turn) listenAfterSpeaking();
+      abortRef.current = null;
+      // Stop button already cancelled the voice turn and mic itself — don't
+      // speak the partial answer or reopen anything on its way out.
+      if (!aborted) {
+        maybeSpeak(acc, true);
+        if (!turn) listenAfterSpeaking();
+      } else if (turn) {
+        turn.noMoreChunks();
+      }
       setBusy(false);
     }
+  };
+
+  // Escape hatch for a slow/hung reply or speech you just don't want to hear
+  // out — cancels the network request, kills any queued/playing speech, and
+  // closes the mic, all in one action instead of waiting it out.
+  const stopAll = () => {
+    abortRef.current?.abort();
+    speechGenRef.current++;
+    if (typeof window !== "undefined") window.speechSynthesis?.cancel();
+    speakingRef.current = false;
+    setSpeaking(false);
+    stopBargeInListener();
+    try {
+      recRef.current?.abort?.();
+    } catch {
+      /* ignore */
+    }
+    listeningRef.current = false;
+    setListening(false);
+    setBusy(false);
   };
 
   const startListening = () => {
@@ -574,9 +626,13 @@ export function ChatPanel({
         }
         // Still going — push the "you've gone quiet" deadline out so a
         // mid-sentence pause doesn't end the turn early. Only real silence
-        // (no new words for 1.8s) counts as done.
+        // counts as done — how long we wait adapts to how the sentence
+        // sounds: trailing punctuation-like intonation ("." "?" "!" already
+        // recognized) reads as a completed thought, so respond snappily;
+        // otherwise assume you might still be mid-sentence and wait longer.
         clearSilenceTimer();
-        silenceTimer = setTimeout(finishAndSend, 1800);
+        const soundsFinished = /[.!?]\s*$/.test(txt.trim());
+        silenceTimer = setTimeout(finishAndSend, soundsFinished ? 900 : 1800);
       };
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       rec.onerror = (e: any) => {
@@ -708,6 +764,18 @@ export function ChatPanel({
         <div className="text-[11px] mb-2 px-1" style={{ color: voiceErr ? "#ff6b6b" : accent }}>
           {voiceErr ||
             (listening ? "🎙️ Listening — speak now…" : busy ? "Thinking…" : "🔊 Speaking — talk anytime to interrupt…")}
+        </div>
+      )}
+
+      {(busy || speaking) && (
+        <div className="flex justify-end mb-2">
+          <button
+            onClick={stopAll}
+            className="text-[11px] px-3 py-1 rounded-full font-semibold"
+            style={{ background: "#e0392b", color: "#fff" }}
+          >
+            ⏹ Stop
+          </button>
         </div>
       )}
 
