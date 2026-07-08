@@ -37,7 +37,7 @@ ACCURACY IS CRITICAL — never claim something is missing, broken, or "should be
 
 ${PROCEDURE}
 
-Use as many tool calls as genuinely needed to verify a finding properly — depth over speed — but don't wander the whole codebase without purpose; every read should be in service of confirming or ruling out a specific hypothesis. Make sure you've saved (or explicitly concluded nothing new is warranted) before finishing. Be specific and actionable, not generic. Respond directly without preamble. ${EXPERT}`;
+Use as many tool calls as genuinely needed to verify a finding properly — depth over speed — but don't wander the whole codebase without purpose; every read should be in service of confirming or ruling out a specific hypothesis. EXPLORE EFFICIENTLY: before querying a table's data, check its existence/columns in the same batch rather than discovering it's wrong after the fact; when you need several related tables, query information_schema once for the full picture instead of probing table-by-table; never issue the same or a near-identical query twice in one run — depth of investigation is good, repeating or fumbling toward the right query is wasted spend, not rigor. Make sure you've saved (or explicitly concluded nothing new is warranted) before finishing. Be specific and actionable, not generic. Respond directly without preamble. ${EXPERT}`;
 
 const CODE_NOTE = `You can read the FootRank Flutter codebase with list_repo and read_repo_file, and the LIVE database with db_read (read-only). Ground every claim in what the code or database actually shows — cite file paths or query results. Verify before you assert.
 
@@ -48,7 +48,7 @@ export const AGENTS: AgentSpec[] = [
     id: "cybersecurity",
     name: "Cybersecurity",
     accent: "#e11d48",
-    cadence: "hourly",
+    cadence: "4h", // was hourly — 6x cost cut; trade-off is slower reaction to a brand-new issue
     system: `You are a principal application-security engineer (OWASP-grade) responsible for FootRank. ${CODE_NOTE}
 
 Think like an attacker, report like a defender. Threat-model the real attack surface and rank findings by exploitability × impact. Your expert focus: Supabase Row-Level-Security correctness (every policy: USING vs WITH CHECK, anon vs authenticated role, SECURITY DEFINER functions with a pinned search_path, RLS actually ENABLED on every table), broken object/function-level authorization (can user A act on user B's rows?), auth & session handling, secrets exposure (note that Supabase anon keys and Firebase client API keys are PUBLIC by design — do not flag those as leaks), storage-bucket exposure, injection, and insecure dependencies (web_search current CVEs for Flutter/supabase_flutter/firebase). Always test the actual exploit path with db_read before claiming a hole; if auth.uid() guards already block anonymous access, say so and rate it accordingly. Save findings with severity as priority. ${ADVISORY}`,

@@ -1,11 +1,18 @@
 import { runAgentLoop } from "./run-loop";
-import { SONNET } from "../lib/anthropic";
-import { AGENTS, AGENT_BY_ID, type AgentSpec } from "./registry";
+import { OPUS, SONNET } from "../lib/anthropic";
+import { AGENTS, AGENT_BY_ID, isTechnical, type AgentSpec } from "./registry";
 import { toolsFor, handlerToolsFor } from "../tools/registry";
 import { writeMemory, logActivity } from "../lib/memory";
 import { recordResult, openSuggestionsForAgent } from "../lib/suggestions";
 import { withinBudget } from "../lib/usage";
 import type { AgentId, Cadence, Suggestion } from "../lib/types";
+
+// Technical agents whose "Okay" is most likely to write a migration directly
+// to the live database (no human review gate, unlike a PR) — these stay on
+// Opus. Other technical agents mostly produce a PR (still Opus-authored
+// code, but a human reviews and merges it before it takes effect) or a text
+// deliverable (QA's manual test scripts), so Sonnet is a safe, cheaper fit.
+const HIGH_STAKES_EXECUTION: ReadonlySet<AgentId> = new Set(["cybersecurity", "engineering"]);
 
 export async function runAgent(spec: AgentSpec): Promise<string> {
   // The real, accurate signal for what's still unresolved — not a fuzzy
@@ -78,12 +85,24 @@ ${s.body}
 
 Execute it now.`;
 
+  // Non-technical agents have no write tools here — their "Okay" is just a
+  // text deliverable, so match their suggestion-generation tier rather than
+  // defaulting to the most expensive model for every execution. Technical
+  // agents that DO write code/SQL stay on a strong model, reserving Opus
+  // specifically for the ones most likely to apply a migration directly.
+  const model = !isTechnical(s.agent)
+    ? (spec.model ?? SONNET)
+    : HIGH_STAKES_EXECUTION.has(s.agent)
+      ? OPUS
+      : SONNET;
+
   const { text, toolOutputs } = await runAgentLoop({
     agent: s.agent,
     system,
     userMessage,
     tools: handlerToolsFor(s.agent),
     maxTurns: 14,
+    model,
   });
   // Capture the opened PR URL deterministically from the tool output.
   const prLine = toolOutputs.find((o) => o.startsWith("Opened PR: "));
