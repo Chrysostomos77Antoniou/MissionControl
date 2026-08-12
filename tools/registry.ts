@@ -111,7 +111,7 @@ const ALL_TOOLS: Record<ToolName, Anthropic.Tool> = {
 const BASE: ToolName[] = ["web_search", "read_footrank_stats", "db_read", "save_suggestion"];
 const BASE_CODE: ToolName[] = ["web_search", "read_footrank_stats", "db_read", "list_repo", "read_repo_file", "save_suggestion"];
 
-const TECHNICAL: AgentId[] = ["cybersecurity", "engineering", "developer", "qa", "uxdesign", "devops"];
+const TECHNICAL: AgentId[] = ["cybersecurity", "engineering", "developer", "qa", "uxdesign", "devops", "legal"];
 const isTechnical = (a: AgentId) => TECHNICAL.includes(a);
 
 // Suggestion-time toolset (read-only + save). Agents only advise during cycles.

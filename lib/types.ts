@@ -10,7 +10,8 @@ export type AgentId =
   | "competitive"
   | "monetization"
   | "devops"
-  | "copywriter";
+  | "copywriter"
+  | "legal";
 
 export type Cadence = "hourly" | "4h" | "daily" | "5day" | "ondemand";
 

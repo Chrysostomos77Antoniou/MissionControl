@@ -94,6 +94,7 @@ const AGENT_ROOM: Record<AgentId, string> = {
   competitive: "workspace",
   monetization: "workspace",
   copywriter: "workspace",
+  legal: "workspace",
 };
 
 function hexToNum(hex: string): number {
