@@ -91,7 +91,6 @@ const AGENT_ROOM: Record<AgentId, string> = {
   uxdesign: "workspace",
   marketing: "workspace",
   growth: "workspace",
-  data: "workspace",
   competitive: "workspace",
   monetization: "workspace",
   copywriter: "workspace",

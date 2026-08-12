@@ -6,7 +6,6 @@ export type AgentId =
   | "uxdesign"
   | "marketing"
   | "growth"
-  | "data"
   | "community"
   | "competitive"
   | "monetization"
