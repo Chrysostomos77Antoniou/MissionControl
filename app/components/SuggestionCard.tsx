@@ -171,7 +171,7 @@ export function SuggestionCard({ s, onResolve }: { s: Suggestion; onResolve: () 
           <button
             onClick={loadDiff}
             className="px-3 py-1 mr-2 rounded text-xs"
-            style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--cyan)" }}
+            style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--amber)" }}
           >
             {showDiff ? "▾ Hide diff" : "▸ View diff"}
           </button>
@@ -189,7 +189,7 @@ export function SuggestionCard({ s, onResolve }: { s: Suggestion; onResolve: () 
               {diff?.length === 0 && <div style={{ color: "var(--text-dim)" }}>No changes found.</div>}
               {diff?.map((f) => (
                 <div key={f.filename} className="mb-3">
-                  <div style={{ color: "var(--cyan)" }}>
+                  <div style={{ color: "var(--amber)" }}>
                     {f.filename} <span style={{ color: "var(--growth)" }}>+{f.additions}</span>{" "}
                     <span style={{ color: "var(--danger)" }}>-{f.deletions}</span>
                   </div>

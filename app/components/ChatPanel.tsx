@@ -825,7 +825,7 @@ export function ChatPanel({
             className={btn}
             style={{
               border: "1px solid var(--border)",
-              background: speakOut ? "color-mix(in srgb, var(--cyan) 18%, transparent)" : "transparent",
+              background: speakOut ? "color-mix(in srgb, var(--amber) 18%, transparent)" : "transparent",
               color: "var(--text)",
             }}
           >

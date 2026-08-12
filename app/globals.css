@@ -9,7 +9,6 @@
   --text: #efe9e1;
   --text-dim: #8c8378;
   --amber: #ffae3b;
-  --cyan: #ffae3b;       /* primary repointed to amber */
   --marketing: #ffae3b;
   --growth: #ffd23f;     /* "ready" reads as gold on black */
   --content: #ff8a1f;
@@ -44,7 +43,6 @@ body {
   background-size: 48px 48px;
   mask-image: radial-gradient(ellipse 100% 90% at 50% 20%, #000 50%, transparent 100%);
 }
-.hud-scanline { display: none; }
 
 main, .above { position: relative; z-index: 1; }
 
@@ -110,21 +108,20 @@ main, .above { position: relative; z-index: 1; }
 
 button { transition: background-color .15s ease, color .15s ease, box-shadow .15s ease, transform .1s ease, opacity .15s ease; }
 
-/* Animated agent rooms */
-.agent-room { transition: transform .22s cubic-bezier(.2,.7,.2,1), box-shadow .22s ease, border-color .22s ease, background-color .22s ease; }
-.agent-room:hover {
-  transform: translateY(-5px) scale(1.035);
-  border-color: var(--acc);
-  background-color: rgba(255, 180, 90, 0.04);
-  box-shadow: 0 14px 38px -12px var(--acc), 0 0 0 1px color-mix(in srgb, var(--acc) 40%, transparent) inset;
+/* Nothing in this file styled focus at all — on a near-black, low-contrast
+   glass UI, keyboard focus needs to be deliberate, not left to whatever the
+   browser default happens to render on top of it. */
+:focus-visible {
+  outline: 2px solid var(--amber);
+  outline-offset: 2px;
+  border-radius: 2px;
 }
-.agent-room .mono { transition: transform .22s cubic-bezier(.2,.7,.2,1); }
-.agent-room:hover .mono { transform: scale(1.1) rotate(-2deg); }
-.agent-room .acc-bar {
-  height: 2px; width: 22px; border-radius: 2px; margin-top: 2px;
-  background: var(--acc); opacity: .5; transition: width .22s ease, opacity .22s ease;
-}
-.agent-room:hover .acc-bar { width: 60%; opacity: 1; }
+
+/* Native <button> defaults to cursor: default (not pointer) in Chrome/Firefox
+   — every button in this app was relying on that browser default instead of
+   declaring intent. */
+button, [role="button"], a, input[type="checkbox"] { cursor: pointer; }
+button:disabled, [role="button"][aria-disabled="true"] { cursor: not-allowed; }
 
 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
 @keyframes ringspin { to { transform: rotate(360deg); } }

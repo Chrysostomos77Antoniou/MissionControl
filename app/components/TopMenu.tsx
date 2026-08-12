@@ -3,6 +3,7 @@ import { QARunButton } from "./QARunButton";
 import { LogoutButton } from "./LogoutButton";
 import { InstallButton } from "./InstallButton";
 import { SpendMeter } from "./SpendMeter";
+import { HealthPill } from "./HealthPill";
 import type { View } from "./Shell";
 
 export function TopMenu({ view, onNavigate }: { view: View; onNavigate: (v: View) => void }) {
@@ -11,10 +12,10 @@ export function TopMenu({ view, onNavigate }: { view: View; onNavigate: (v: View
       onClick={() => onNavigate(to)}
       className="font-display text-[11px] px-3 py-1 rounded transition"
       style={{
-        color: view === to ? "#04070f" : "var(--cyan)",
-        background: view === to ? "var(--cyan)" : "transparent",
+        color: view === to ? "#04070f" : "var(--amber)",
+        background: view === to ? "var(--amber)" : "transparent",
         border: "1px solid var(--border)",
-        boxShadow: view === to ? "0 0 14px var(--cyan)" : "none",
+        boxShadow: view === to ? "0 0 14px var(--amber)" : "none",
       }}
     >
       {label}
@@ -37,6 +38,7 @@ export function TopMenu({ view, onNavigate }: { view: View; onNavigate: (v: View
         </nav>
       </div>
       <div className="flex items-center gap-3">
+        <HealthPill />
         <SpendMeter />
         <InstallButton />
         <QARunButton />

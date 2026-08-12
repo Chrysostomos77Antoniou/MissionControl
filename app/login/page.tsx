@@ -48,7 +48,7 @@ export default function LoginPage() {
           type="submit"
           disabled={busy}
           className="w-full text-sm px-3 py-2 rounded font-medium"
-          style={{ background: "var(--cyan)", color: "#0a0c11" }}
+          style={{ background: "var(--amber)", color: "#0a0c11" }}
         >
           {busy ? "Signing in…" : "Sign in"}
         </button>
