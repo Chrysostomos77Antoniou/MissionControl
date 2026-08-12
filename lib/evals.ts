@@ -1,6 +1,7 @@
 import { anthropic, HAIKU } from "./anthropic";
 import { supabaseAdmin } from "./supabase";
 import { recordUsage } from "./usage";
+import { logActivity } from "./memory";
 import type { AgentId, Suggestion } from "./types";
 
 export interface AgentEval {
@@ -49,10 +50,16 @@ export async function gradeAgentRun(
       .join(" ")
       .trim();
     const match = raw.match(/SCORE:\s*([1-5])\s*REASON:\s*(.+)/i);
-    if (!match) return; // unparseable — skip rather than store garbage
+    if (!match) {
+      // Silent otherwise — a missing grade would be indistinguishable from
+      // "this agent hasn't run yet" without this trace.
+      await logActivity(agent, "eval:unparseable", raw.slice(0, 200));
+      return;
+    }
     score = Number(match[1]);
     reasoning = match[2].trim().slice(0, 500);
-  } catch {
+  } catch (err) {
+    await logActivity(agent, "eval:failed", err instanceof Error ? err.message.slice(0, 200) : "unknown error");
     return; // never let a grading failure affect the cycle itself
   }
 
