@@ -37,6 +37,25 @@ export async function openSuggestionsForAgent(agent: AgentId): Promise<Suggestio
   return (data ?? []) as Suggestion[];
 }
 
+// A lightweight, cross-agent digest (title/category only, not the full body)
+// so one agent doesn't propose something that duplicates or contradicts what
+// another agent already has open — each agent otherwise only ever sees its
+// OWN open suggestions via openSuggestionsForAgent, with zero visibility
+// into the other 12 agents' pending findings.
+export async function allOpenSuggestionsDigest(
+  excludeAgent: AgentId,
+): Promise<{ agent: AgentId; category: string | null; title: string }[]> {
+  const { data } = await supabaseAdmin
+    .from("suggestions")
+    .select("agent, category, title")
+    .eq("status", "new")
+    .order("created_at", { ascending: false })
+    .limit(40);
+  return ((data ?? []) as { agent: AgentId; category: string | null; title: string }[]).filter(
+    (s) => s.agent !== excludeAgent,
+  );
+}
+
 export async function getSuggestion(id: string): Promise<Suggestion | null> {
   const { data } = await supabaseAdmin.from("suggestions").select("*").eq("id", id).single();
   return (data as Suggestion) ?? null;

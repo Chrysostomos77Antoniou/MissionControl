@@ -2,9 +2,12 @@ import { runAgentLoop } from "./run-loop";
 import { OPUS, SONNET } from "../lib/anthropic";
 import { AGENTS, AGENT_BY_ID, isTechnical, type AgentSpec } from "./registry";
 import { toolsFor, handlerToolsFor } from "../tools/registry";
-import { writeMemory, logActivity } from "../lib/memory";
-import { recordResult, openSuggestionsForAgent } from "../lib/suggestions";
+import { writeMemory, recentMemory, logActivity } from "../lib/memory";
+import { recordResult, openSuggestionsForAgent, allOpenSuggestionsDigest } from "../lib/suggestions";
 import { withinBudget } from "../lib/usage";
+import { acquireAgentLock, releaseAgentLock } from "../lib/lock";
+import { alertIfCredentialsBroken } from "../lib/health";
+import { reviewCycleConsensus } from "../lib/consensus";
 import type { AgentId, Cadence, Suggestion } from "../lib/types";
 
 // Technical agents whose "Okay" is most likely to write a migration directly
@@ -15,27 +18,55 @@ import type { AgentId, Cadence, Suggestion } from "../lib/types";
 const HIGH_STAKES_EXECUTION: ReadonlySet<AgentId> = new Set(["cybersecurity", "engineering"]);
 
 export async function runAgent(spec: AgentSpec): Promise<string> {
-  // The real, accurate signal for what's still unresolved — not a fuzzy
-  // memory of what the agent last happened to write. A still-open finding
-  // doesn't need re-saving; that's what made every cycle look "different"
-  // even when the underlying picture hadn't actually changed.
-  const open = await openSuggestionsForAgent(spec.id);
-  const openList = open.length
-    ? open.map((s) => `- (${s.priority}) ${s.title}`).join("\n")
-    : "none — your inbox is currently clear";
-  const userMessage = `Your own findings currently OPEN and unresolved in the owner's inbox:\n${openList}\n\nDo not save a duplicate of any of these. If the evidence still supports one, that's fine and expected — it's already pending, leave it as-is. Only save something new if it's a genuinely distinct problem, or a material update to one of the above (say so explicitly if it's an update). Run your review now per your standard procedure.`;
+  // Guards against the SAME agent's cycle running twice concurrently (a
+  // double-fired cron, or a manual "Run" overlapping a scheduled cycle
+  // already in flight for it) — that would double the API spend for no
+  // benefit and race on writing suggestions/memory for this agent.
+  const locked = await acquireAgentLock(spec.id);
+  if (!locked) {
+    await logActivity(spec.id, "cycle:skipped-overlap", "Already running — skipped to avoid a duplicate concurrent run.");
+    return "Skipped — already running.";
+  }
+  try {
+    // The real, accurate signal for what's still unresolved — not a fuzzy
+    // memory of what the agent last happened to write. A still-open finding
+    // doesn't need re-saving; that's what made every cycle look "different"
+    // even when the underlying picture hadn't actually changed.
+    const [open, crossAgent, recent] = await Promise.all([
+      openSuggestionsForAgent(spec.id),
+      allOpenSuggestionsDigest(spec.id),
+      recentMemory(spec.id, 3),
+    ]);
+    const openList = open.length
+      ? open.map((s) => `- (${s.priority}) ${s.title}`).join("\n")
+      : "none — your inbox is currently clear";
+    const crossList = crossAgent.length
+      ? crossAgent.map((s) => `- [${s.agent}] (${s.category ?? "general"}) ${s.title}`).join("\n")
+      : "none currently open";
+    // Previously this was written every cycle (writeMemory below) but only
+    // ever read back on the owner-facing /agents/[id] history page — never
+    // fed into the agent's own next run, so nothing was actually learned
+    // cycle over cycle despite the storage existing. Feeding it back in here
+    // closes that loop.
+    const recentList = recent.length
+      ? recent.map((m) => `- (${new Date(m.cycle_at).toISOString().slice(0, 10)}) ${m.summary}`).join("\n")
+      : "no prior cycle history yet";
+    const userMessage = `Your own findings currently OPEN and unresolved in the owner's inbox:\n${openList}\n\nDo not save a duplicate of any of these. If the evidence still supports one, that's fine and expected — it's already pending, leave it as-is. Only save something new if it's a genuinely distinct problem, or a material update to one of the above (say so explicitly if it's an update).\n\nOther agents' currently OPEN findings (for awareness only, titles/categories — not your job to act on these, but don't duplicate one or propose something that contradicts it without good reason):\n${crossList}\n\nYour own conclusions from your last few cycles (for continuity — build on this or note what's changed since, don't just re-run the same investigation from scratch):\n${recentList}\n\nRun your review now per your standard procedure.`;
 
-  const { text } = await runAgentLoop({
-    agent: spec.id,
-    system: spec.system,
-    userMessage,
-    tools: toolsFor(spec.id),
-    maxTurns: 12,
-    model: spec.model ?? SONNET, // per-agent override for low-stakes agents (see registry.ts)
-    effort: "high", // deep analysis before concluding, not a quick scan
-  });
-  await writeMemory(spec.id, text.slice(0, 500));
-  return text;
+    const { text } = await runAgentLoop({
+      agent: spec.id,
+      system: spec.system,
+      userMessage,
+      tools: toolsFor(spec.id),
+      maxTurns: 12,
+      model: spec.model ?? SONNET, // per-agent override for low-stakes agents (see registry.ts)
+      effort: "high", // deep analysis before concluding, not a quick scan
+    });
+    await writeMemory(spec.id, text.slice(0, 500));
+    return text;
+  } finally {
+    await releaseAgentLock(spec.id);
+  }
 }
 
 export async function runGroup(cadence: Cadence): Promise<Record<string, string>> {
@@ -44,7 +75,12 @@ export async function runGroup(cadence: Cadence): Promise<Record<string, string>
     await logActivity("engineering", "cycle:skipped", budget.detail);
     return { skipped: budget.detail };
   }
+  // Cheap (2 HTTP calls, no LLM spend) — catch a dead GitHub/Supabase token
+  // before an agent silently eats a turn on failing tool calls. Never let a
+  // hiccup in the check itself block the actual cycle from running.
+  await alertIfCredentialsBroken().catch(() => {});
   const due = AGENTS.filter((a) => a.cadence === cadence);
+  const cycleStart = new Date().toISOString();
   await logActivity(due[0]?.id ?? "engineering", "cycle:start", `Running ${cadence} group (${due.length} agents).`);
   const results = await Promise.allSettled(due.map((a) => runAgent(a)));
   const out: Record<string, string> = {};
@@ -52,6 +88,11 @@ export async function runGroup(cadence: Cadence): Promise<Record<string, string>
     const r = results[i];
     out[a.id] = r.status === "fulfilled" ? r.value : `Error: ${r.reason}`;
   });
+  // Each agent only sees suggestions that existed BEFORE this cycle started
+  // (see allOpenSuggestionsDigest) — two agents that independently land on
+  // the same new finding in this same parallel batch can't catch that
+  // overlap themselves. One cheap pass over just this cycle's titles does.
+  await reviewCycleConsensus(due.map((a) => a.id), cycleStart).catch(() => {});
   return out;
 }
 
@@ -103,6 +144,10 @@ Execute it now.`;
     tools: handlerToolsFor(s.agent),
     maxTurns: 14,
     model,
+    // The step that actually writes the PR/migration matters at least as
+    // much as the analysis that proposed it — give it the same "think
+    // carefully" setting runAgent already uses for suggestion-generation.
+    effort: "high",
   });
   // Capture the opened PR URL deterministically from the tool output.
   const prLine = toolOutputs.find((o) => o.startsWith("Opened PR: "));

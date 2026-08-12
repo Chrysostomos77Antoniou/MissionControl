@@ -29,7 +29,7 @@ export async function getOrchestratorBriefing(): Promise<string> {
   const name = (a: string) => AGENT_BY_ID[a as AgentId]?.name ?? a;
 
   const statusLine = Object.entries(statuses)
-    .map(([a, s]) => `${name(a)}=${s}`)
+    .map(([a, s]) => `${name(a)}=${s.live}${s.tool ? `(${s.tool})` : ""}`)
     .join(", ");
 
   const open = (sugg ?? [])

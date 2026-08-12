@@ -60,9 +60,14 @@ const ALL_TOOLS: Record<ToolName, Anthropic.Tool> = {
         category: { type: "string", description: "Short tag, e.g. 'bug', 'feature', 'security', 'growth'." },
         title: { type: "string", description: "One-line summary." },
         body: { type: "string", description: "Detailed recommendation, with concrete rationale or steps." },
+        evidence: {
+          type: "string",
+          description:
+            "The specific tool call and result that supports this finding — e.g. \"db_read: select * from pg_policies where tablename='matches' returned 0 rows (no policy exists)\" or \"read_repo_file: lib/match/data/match_repository.dart:42 shows no index on scheduled_at\". If this is a strategic/creative recommendation with no single verifiable fact to cite (e.g. a marketing angle), say that plainly instead of inventing evidence — do not fabricate a citation.",
+        },
         priority: { type: "string", enum: ["low", "medium", "high"] },
       },
-      required: ["category", "title", "body", "priority"],
+      required: ["category", "title", "body", "evidence", "priority"],
     },
   },
   open_github_pr: {
@@ -143,11 +148,13 @@ export async function dispatchTool(
       const priority = (["low", "medium", "high"].includes(String(input.priority))
         ? String(input.priority)
         : "medium") as "low" | "medium" | "high";
+      const evidence = String(input.evidence ?? "").trim();
+      const body = evidence ? `${String(input.body)}\n\n— Evidence: ${evidence}` : String(input.body);
       await saveSuggestion({
         agent,
         category: String(input.category ?? "general"),
         title: String(input.title),
-        body: String(input.body),
+        body,
         priority,
       });
       if (priority === "high") {

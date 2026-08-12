@@ -83,6 +83,37 @@ export async function spendSummary(): Promise<SpendSummary> {
   };
 }
 
+export interface DailySpend {
+  day: string; // YYYY-MM-DD
+  cost: number;
+}
+
+// Daily cost for the last N days, oldest first — feeds the spend trend
+// sparkline. The meter previously only ever showed point-in-time totals
+// (today/all-time), with no way to see whether spend is trending up or down.
+export async function spendHistory(days = 14): Promise<DailySpend[]> {
+  const since = new Date();
+  since.setHours(0, 0, 0, 0);
+  since.setDate(since.getDate() - (days - 1));
+  const { data } = await supabaseAdmin
+    .from("usage_log")
+    .select("cost, created_at")
+    .neq("model", LOW_CREDIT)
+    .gte("created_at", since.toISOString());
+
+  const byDay = new Map<string, number>();
+  for (let i = 0; i < days; i++) {
+    const d = new Date(since);
+    d.setDate(since.getDate() + i);
+    byDay.set(d.toISOString().slice(0, 10), 0);
+  }
+  for (const row of (data ?? []) as { cost: number; created_at: string }[]) {
+    const day = row.created_at.slice(0, 10);
+    byDay.set(day, (byDay.get(day) ?? 0) + Number(row.cost));
+  }
+  return Array.from(byDay, ([day, cost]) => ({ day, cost }));
+}
+
 // Budget guard: true means agents may run. Stops spend once the daily cap or
 // total budget is reached.
 export async function withinBudget(): Promise<{ ok: boolean; detail: string }> {

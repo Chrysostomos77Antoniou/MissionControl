@@ -7,8 +7,13 @@ export type AgentLive = "working" | "done" | "idle";
 const WORKING = /^(tool:|cycle:start|qa:testing|qa:retesting|fixing|handle)/;
 const DONE = /^(qa:passed|live|executed|finalized|handled|saved|approval)/;
 
+export interface AgentStatusInfo {
+  live: AgentLive;
+  tool: string | null; // raw tool name (e.g. "db_read"), only set while live === "working"
+}
+
 // Circle status per agent: red = working, green = recently done, grey = idle.
-export async function agentStatuses(): Promise<Record<AgentId, AgentLive>> {
+export async function agentStatuses(): Promise<Record<AgentId, AgentStatusInfo>> {
   const since = new Date(Date.now() - 30 * 60 * 1000).toISOString();
   const [{ data: acts }, { data: sugg }] = await Promise.all([
     supabaseAdmin
@@ -25,21 +30,30 @@ export async function agentStatuses(): Promise<Record<AgentId, AgentLive>> {
     if (!lastByAgent.has(a.agent)) lastByAgent.set(a.agent, { action: a.action, created_at: a.created_at });
   }
 
-  const out = {} as Record<AgentId, AgentLive>;
+  const toolOf = (action: string): string | null => {
+    const m = /^tool:(.+)$/.exec(action);
+    return m ? m[1] : null;
+  };
+
+  const out = {} as Record<AgentId, AgentStatusInfo>;
   for (const spec of AGENTS) {
     if (busy.has(spec.id)) {
-      out[spec.id] = "working";
+      out[spec.id] = { live: "working", tool: toolOf(lastByAgent.get(spec.id)?.action ?? "") };
       continue;
     }
     const last = lastByAgent.get(spec.id);
     if (!last) {
-      out[spec.id] = "idle";
+      out[spec.id] = { live: "idle", tool: null };
       continue;
     }
     const ageMin = (Date.now() - new Date(last.created_at).getTime()) / 60000;
-    if (ageMin < 4 && WORKING.test(last.action)) out[spec.id] = "working";
-    else if (ageMin < 20 && DONE.test(last.action)) out[spec.id] = "done";
-    else out[spec.id] = "idle";
+    if (ageMin < 4 && WORKING.test(last.action)) {
+      out[spec.id] = { live: "working", tool: toolOf(last.action) };
+    } else if (ageMin < 20 && DONE.test(last.action)) {
+      out[spec.id] = { live: "done", tool: null };
+    } else {
+      out[spec.id] = { live: "idle", tool: null };
+    }
   }
   return out;
 }
