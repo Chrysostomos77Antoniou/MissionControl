@@ -76,7 +76,20 @@ export async function runAgentLoop(opts: {
       }
     }
     if (toolResults.length === 0) return { text: finalText(response.content), toolOutputs };
-    messages.push({ role: "user", content: toolResults });
+
+    // With 2 turns left, a broad-scope agent mid-investigation is about to
+    // hit the cap and produce nothing — the whole cycle's spend for zero
+    // usable output. Nudge it to wrap up with whatever it's found so far
+    // instead of silently dead-ending on "Reached max turns."
+    const turnsLeft = maxTurns - turn - 1;
+    const nextInput: Anthropic.ContentBlockParam[] = [...toolResults];
+    if (turnsLeft === 2) {
+      nextInput.push({
+        type: "text",
+        text: `You have ${turnsLeft} turns left before this cycle ends automatically. Stop opening new investigation threads and write your final conclusion now — synthesize what you've already found into your best answer, even if incomplete, and save any suggestion immediately rather than waiting.`,
+      });
+    }
+    messages.push({ role: "user", content: nextInput });
   }
   return { text: "Reached max turns.", toolOutputs };
 }

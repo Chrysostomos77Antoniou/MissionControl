@@ -61,7 +61,11 @@ export async function runAgent(spec: AgentSpec): Promise<string> {
       system: spec.system,
       userMessage,
       tools: toolsFor(spec.id),
-      maxTurns: 12,
+      // Was 12 — broad-scope agents (architecture, UX, funnel analysis) were
+      // routinely hitting this cap mid-investigation and dead-ending on
+      // "Reached max turns." with zero usable output, for the same spend as
+      // a successful run. Paired with the wrap-up nudge in run-loop.ts.
+      maxTurns: 16,
       model: spec.model ?? SONNET, // per-agent override for low-stakes agents (see registry.ts)
       effort: "high", // deep analysis before concluding, not a quick scan
     });
