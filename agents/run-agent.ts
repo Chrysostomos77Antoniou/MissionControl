@@ -69,8 +69,11 @@ export async function runAgent(spec: AgentSpec): Promise<string> {
 
     // Never let a grading failure affect the cycle that triggered it —
     // same non-blocking pattern as alertIfCredentialsBroken/reviewCycleConsensus above.
-    const saved = await suggestionsSince(spec.id, cycleStart);
-    await gradeAgentRun(spec.id, cycleStart, text, saved).catch(() => {});
+    // suggestionsSince itself is guarded too: a transient fetch failure here
+    // must not surface as a failed cycle when the agent's actual work (memory
+    // write, any suggestions already saved) already succeeded.
+    const saved = await suggestionsSince(spec.id, cycleStart).catch(() => [] as Suggestion[]);
+    await gradeAgentRun(spec.id, cycleStart, text, saved, open).catch(() => {});
 
     return text;
   } finally {

@@ -23,11 +23,15 @@ export async function gradeAgentRun(
   cycleAt: string,
   text: string,
   saved: Suggestion[],
+  open: Suggestion[],
 ): Promise<void> {
   const savedList = saved.length
     ? saved.map((s) => `- (${s.priority}) ${s.title}: ${s.body.slice(0, 200)}`).join("\n")
     : "(none saved this cycle)";
-  const userMessage = `Agent's final summary for this cycle:\n${text.slice(0, 1000)}\n\nSuggestions saved this cycle:\n${savedList}`;
+  const openList = open.length
+    ? open.map((s) => `- (${s.priority}) ${s.title}`).join("\n")
+    : "(none)";
+  const userMessage = `Findings already open before this cycle started (for judging duplication only):\n${openList}\n\nAgent's final summary for this cycle:\n${text.slice(0, 1000)}\n\nSuggestions saved this cycle:\n${savedList}`;
 
   let score: number;
   let reasoning: string;
