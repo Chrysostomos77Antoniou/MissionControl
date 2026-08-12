@@ -8,6 +8,8 @@ import { withinBudget } from "../lib/usage";
 import { acquireAgentLock, releaseAgentLock } from "../lib/lock";
 import { alertIfCredentialsBroken } from "../lib/health";
 import { reviewCycleConsensus } from "../lib/consensus";
+import { suggestionsSince } from "../lib/suggestions";
+import { gradeAgentRun } from "../lib/evals";
 import type { AgentId, Cadence, Suggestion } from "../lib/types";
 
 // Technical agents whose "Okay" is most likely to write a migration directly
@@ -53,6 +55,7 @@ export async function runAgent(spec: AgentSpec): Promise<string> {
       : "no prior cycle history yet";
     const userMessage = `Your own findings currently OPEN and unresolved in the owner's inbox:\n${openList}\n\nDo not save a duplicate of any of these. If the evidence still supports one, that's fine and expected — it's already pending, leave it as-is. Only save something new if it's a genuinely distinct problem, or a material update to one of the above (say so explicitly if it's an update).\n\nOther agents' currently OPEN findings (for awareness only, titles/categories — not your job to act on these, but don't duplicate one or propose something that contradicts it without good reason):\n${crossList}\n\nYour own conclusions from your last few cycles (for continuity — build on this or note what's changed since, don't just re-run the same investigation from scratch):\n${recentList}\n\nRun your review now per your standard procedure.`;
 
+    const cycleStart = new Date().toISOString();
     const { text } = await runAgentLoop({
       agent: spec.id,
       system: spec.system,
@@ -63,6 +66,12 @@ export async function runAgent(spec: AgentSpec): Promise<string> {
       effort: "high", // deep analysis before concluding, not a quick scan
     });
     await writeMemory(spec.id, text.slice(0, 500));
+
+    // Never let a grading failure affect the cycle that triggered it —
+    // same non-blocking pattern as alertIfCredentialsBroken/reviewCycleConsensus above.
+    const saved = await suggestionsSince(spec.id, cycleStart);
+    await gradeAgentRun(spec.id, cycleStart, text, saved).catch(() => {});
+
     return text;
   } finally {
     await releaseAgentLock(spec.id);
