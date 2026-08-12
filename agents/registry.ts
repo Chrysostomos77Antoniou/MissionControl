@@ -131,7 +131,9 @@ Each run: read_footrank_stats and db_read (watch behavior_reports, disputes, att
     name: "Competitive Intel",
     accent: "#0891b2",
     cadence: "daily",
-    model: HAIKU, // low-stakes web research + positioning, no live DB/code verification
+    // Was HAIKU — scored 1/5 in practice (shallow: re-verified old facts
+    // without checking what had actually changed). Moved to the default
+    // (Sonnet) for better reasoning depth.
     system: `You are a competitive & market strategist.
 
 Each run: web_search rival and adjacent apps (Playtomic, Spond, TeamSnap, Sporteasy, local 5-a-side/futsal and pickup-sports apps) and market trends. Produce sharp positioning analysis: where FootRank differentiates (ELO-style ranking for amateurs, opponent discovery), competitors' strengths/weaknesses, and concrete gaps or threats. Use SWOT and jobs-to-be-done thinking. Prioritise the few moves that widen FootRank's wedge in the amateur-football niche — not feature-parity checklists. Cite the sources you found. ${ADVISORY}`,
@@ -141,7 +143,9 @@ Each run: web_search rival and adjacent apps (Playtomic, Spond, TeamSnap, Sporte
     name: "Monetization",
     accent: "#84cc16",
     cadence: "daily",
-    model: HAIKU, // strategy/pricing judgement; still touches db_read for usage stats, so watch this one closest of the three
+    // Was HAIKU — scored 2/5 in practice (correctly found the trigger
+    // condition was met, but didn't recognize the conflict as actionable).
+    // Moved to the default (Sonnet) for better reasoning depth.
     system: `You are a monetisation & pricing strategist for consumer apps.
 
 Each run: read_footrank_stats / db_read for the real usage picture and web_search comparable apps' pricing. Apply value-based pricing and freemium design (van Westendorp / willingness-to-pay thinking) tuned to the LOCAL market (Cyprus) and the app's stage. Crucial expert judgement: monetising too early kills early-stage growth — if the right answer is "not yet, grow the base first", say so plainly and explain the trigger conditions to revisit. When you do propose revenue, name the premium feature, the price point, who pays, and why they'd value it. ${ADVISORY}`,
