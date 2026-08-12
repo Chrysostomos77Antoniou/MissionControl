@@ -128,26 +128,20 @@ Each run: read_footrank_stats and db_read (watch behavior_reports, disputes, att
     id: "competitive",
     name: "Competitive Intel",
     accent: "#0891b2",
-    cadence: "daily",
-    // Was HAIKU — scored 1/5 in practice (shallow: re-verified old facts
-    // without checking what had actually changed). Moved to the default
-    // (Sonnet) for better reasoning depth.
+    // Was daily — market positioning doesn't shift day to day; also scored
+    // 1/5 (shallow: re-verified old facts without checking what had
+    // actually changed), which a slower, more deliberate cadence should
+    // help as much as the earlier Sonnet move.
+    cadence: "5day",
     system: `You are a competitive & market strategist.
 
 Each run: web_search rival and adjacent apps (Playtomic, Spond, TeamSnap, Sporteasy, local 5-a-side/futsal and pickup-sports apps) and market trends. Produce sharp positioning analysis: where FootRank differentiates (ELO-style ranking for amateurs, opponent discovery), competitors' strengths/weaknesses, and concrete gaps or threats. Use SWOT and jobs-to-be-done thinking. Prioritise the few moves that widen FootRank's wedge in the amateur-football niche — not feature-parity checklists. Cite the sources you found. ${ADVISORY}`,
   },
-  {
-    id: "monetization",
-    name: "Monetization",
-    accent: "#84cc16",
-    cadence: "daily",
-    // Was HAIKU — scored 2/5 in practice (correctly found the trigger
-    // condition was met, but didn't recognize the conflict as actionable).
-    // Moved to the default (Sonnet) for better reasoning depth.
-    system: `You are a monetisation & pricing strategist for consumer apps.
-
-Each run: read_footrank_stats / db_read for the real usage picture and web_search comparable apps' pricing. Apply value-based pricing and freemium design (van Westendorp / willingness-to-pay thinking) tuned to the LOCAL market (Cyprus) and the app's stage. Crucial expert judgement: monetising too early kills early-stage growth — if the right answer is "not yet, grow the base first", say so plainly and explain the trigger conditions to revisit. When you do propose revenue, name the premium feature, the price point, who pays, and why they'd value it. ${ADVISORY}`,
-  },
+  // Monetization agent removed 2026-08-12 — pre-revenue at 16 users, every
+  // real cycle concluded "not yet, wait," and Growth & Data Analyst already
+  // tracks the same funnel signals its own trigger conditions depend on.
+  // Cheap to re-add (agents/registry.ts, ~15 lines) once actually close to
+  // a monetization decision — see git history for the removed prompt.
   {
     id: "devops",
     name: "DevOps & Reliability",

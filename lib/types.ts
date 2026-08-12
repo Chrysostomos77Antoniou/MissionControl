@@ -8,7 +8,6 @@ export type AgentId =
   | "growth"
   | "community"
   | "competitive"
-  | "monetization"
   | "devops"
   | "copywriter"
   | "legal";
