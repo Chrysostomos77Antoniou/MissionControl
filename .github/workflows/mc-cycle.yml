@@ -1,0 +1,41 @@
+name: Mission Control cycle trigger
+
+on:
+  schedule:
+    # 4h cadence agents (cybersecurity, engineering, developer)
+    - cron: "0 */4 * * *"
+    # daily cadence agents (qa, uxdesign, marketing, data, community, competitive, copywriter)
+    - cron: "0 9 * * *"
+    # 5day cadence agent (growth)
+    - cron: "0 10 */5 * *"
+  workflow_dispatch:
+    inputs:
+      group:
+        description: "Cadence group to run (4h, daily, 5day) or a single agent id"
+        required: false
+        default: "4h"
+
+jobs:
+  trigger:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Determine cadence group for this trigger
+        id: group
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "group=${{ inputs.group }}" >> "$GITHUB_OUTPUT"
+          else
+            case "${{ github.event.schedule }}" in
+              "0 */4 * * *") echo "group=4h" >> "$GITHUB_OUTPUT" ;;
+              "0 9 * * *") echo "group=daily" >> "$GITHUB_OUTPUT" ;;
+              "0 10 */5 * *") echo "group=5day" >> "$GITHUB_OUTPUT" ;;
+              *) echo "unrecognized schedule: ${{ github.event.schedule }}" >&2; exit 1 ;;
+            esac
+          fi
+
+      - name: Call Mission Control cycle endpoint
+        run: |
+          curl --fail --silent --show-error \
+            --request POST \
+            --header "Authorization: Bearer ${{ secrets.MC_CRON_SECRET }}" \
+            "${{ secrets.MC_BASE_URL }}/api/cycle?group=${{ steps.group.outputs.group }}"
