@@ -63,7 +63,7 @@ git commit -m "Add agent_evals table for the agent eval loop"
 
 **Files:**
 - Modify: `lib/suggestions.ts`
-- Create: `lib/suggestions.test.ts`
+- Create: `lib/__tests__/suggestions.test.ts`
 
 **Interfaces:**
 - Consumes: `supabaseAdmin` from `./supabase`, `AgentId`/`Suggestion` from `./types` (both already imported in this file).
@@ -73,13 +73,15 @@ git commit -m "Add agent_evals table for the agent eval loop"
   - `interface ApprovalStats { done: number; dismissed: number; rate: number | null }` — used by Task 5.
   - `agentApprovalStats(agent: AgentId, sinceIso: string): Promise<ApprovalStats>` — used by Task 5.
 
+Note: this project's established test convention (see `tools/__tests__/registry.test.ts`) is a `__tests__` subdirectory, not a colocated `*.test.ts` file — follow that pattern here.
+
 - [ ] **Step 1: Write the failing test for `computeApprovalRate`**
 
-Create `lib/suggestions.test.ts`:
+Create `lib/__tests__/suggestions.test.ts`:
 
 ```ts
 import { describe, expect, it } from "vitest";
-import { computeApprovalRate } from "./suggestions";
+import { computeApprovalRate } from "../suggestions";
 
 describe("computeApprovalRate", () => {
   it("returns the fraction approved when both counts are positive", () => {
@@ -102,8 +104,8 @@ describe("computeApprovalRate", () => {
 
 - [ ] **Step 2: Run the test and verify it fails**
 
-Run: `npx vitest run lib/suggestions.test.ts`
-Expected: FAIL — `computeApprovalRate` is not exported from `./suggestions` (it doesn't exist yet).
+Run: `npx vitest run lib/__tests__/suggestions.test.ts`
+Expected: FAIL — `computeApprovalRate` is not exported from `../suggestions` (it doesn't exist yet).
 
 - [ ] **Step 3: Add the three functions to `lib/suggestions.ts`**
 
@@ -151,7 +153,7 @@ export async function agentApprovalStats(agent: AgentId, sinceIso: string): Prom
 
 - [ ] **Step 4: Run the test and verify it passes**
 
-Run: `npx vitest run lib/suggestions.test.ts`
+Run: `npx vitest run lib/__tests__/suggestions.test.ts`
 Expected: PASS — all 4 assertions green.
 
 - [ ] **Step 5: Full verification**
@@ -161,7 +163,7 @@ Run: `npx tsc --noEmit` then `npm run lint` then `npm run build` — all clean.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add lib/suggestions.ts lib/suggestions.test.ts
+git add lib/suggestions.ts lib/__tests__/suggestions.test.ts
 git commit -m "Add suggestionsSince and agentApprovalStats to lib/suggestions.ts"
 ```
 
