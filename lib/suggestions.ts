@@ -88,3 +88,41 @@ export async function recordResult(
 ): Promise<void> {
   await supabaseAdmin.from("suggestions").update({ result, pr_url, outcome }).eq("id", id);
 }
+
+export async function suggestionsSince(agent: AgentId, sinceIso: string): Promise<Suggestion[]> {
+  const { data } = await supabaseAdmin
+    .from("suggestions")
+    .select("*")
+    .eq("agent", agent)
+    .gte("created_at", sinceIso)
+    .order("created_at", { ascending: false });
+  return (data ?? []) as Suggestion[];
+}
+
+// Pure — no I/O — so this is the one function in this file worth a real
+// unit test. Returns null (not NaN/Infinity) when nothing has been decided
+// yet, so callers can render "no data" instead of a bogus percentage.
+export function computeApprovalRate(done: number, dismissed: number): number | null {
+  const total = done + dismissed;
+  if (total === 0) return null;
+  return done / total;
+}
+
+export interface ApprovalStats {
+  done: number;
+  dismissed: number;
+  rate: number | null;
+}
+
+export async function agentApprovalStats(agent: AgentId, sinceIso: string): Promise<ApprovalStats> {
+  const { data } = await supabaseAdmin
+    .from("suggestions")
+    .select("status")
+    .eq("agent", agent)
+    .in("status", ["done", "dismissed"])
+    .gte("created_at", sinceIso);
+  const rows = (data ?? []) as { status: "done" | "dismissed" }[];
+  const done = rows.filter((r) => r.status === "done").length;
+  const dismissed = rows.filter((r) => r.status === "dismissed").length;
+  return { done, dismissed, rate: computeApprovalRate(done, dismissed) };
+}
