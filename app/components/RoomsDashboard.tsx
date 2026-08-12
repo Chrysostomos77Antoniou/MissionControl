@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
+import Link from "next/link";
 import { AGENTS } from "../../agents/registry";
 import { ChatPanel } from "./ChatPanel";
 import { Monogram } from "./Monogram";
@@ -139,6 +140,14 @@ export function RoomsDashboard() {
                       }}
                     />
                   </button>
+                  <Link
+                    href={`/agents/${spec.id}`}
+                    className="shrink-0 text-[9px] px-1 rounded transition hover:brightness-125"
+                    style={{ color: "var(--text-dim)" }}
+                    title={`View ${spec.name} approval rate and quality grades`}
+                  >
+                    Stats
+                  </Link>
                 </div>
               );
             })}
@@ -200,9 +209,14 @@ export function RoomsDashboard() {
                     <DialogDescription>Private channel · Haiku 4.5</DialogDescription>
                   </div>
                 </div>
-                <DialogClose className="text-[11px]" style={{ color: "var(--text-dim)" }}>
-                  ✕ Close
-                </DialogClose>
+                <div className="flex items-center gap-3">
+                  <Link href={`/agents/${openSpec.id}`} className="text-[11px]" style={{ color: "var(--text-dim)" }}>
+                    Stats →
+                  </Link>
+                  <DialogClose className="text-[11px]" style={{ color: "var(--text-dim)" }}>
+                    ✕ Close
+                  </DialogClose>
+                </div>
               </DialogHeader>
               <div className="flex-1 min-h-0">
                 <ChatPanel
