@@ -41,7 +41,8 @@ const FLOOR_D = 32;
 const FRUSTUM = 30; // orthographic frustum height — tuned so the floor + props fit at default zoom
 
 // Landmarks idle agents wander to — mirrors ai-office's "water cooler,
-// center, window, lounge" destination set.
+// center, window, lounge" destination set. Index 1 (lounge) doubles as
+// the couch's position below.
 const LANDMARKS: THREE.Vector3[] = [
   new THREE.Vector3(2, 0, 1), // water cooler
   new THREE.Vector3(-4, 0, -5), // lounge
@@ -50,6 +51,12 @@ const LANDMARKS: THREE.Vector3[] = [
 
 const ORCH_DESK = new THREE.Vector3(-7, 0, 9);
 const RECEPTION = new THREE.Vector3(16, 0, 11);
+const MEETING_CENTER = new THREE.Vector3(11, 0, -9);
+const MEETING_ROOM_W = 9;
+const MEETING_ROOM_D = 7;
+const MEETING_SEATS: THREE.Vector3[] = [-1.15, 0, 1.15].flatMap((dx) =>
+  [-1.0, 1.0].map((dz) => new THREE.Vector3(MEETING_CENTER.x + dx, 0, MEETING_CENTER.z + dz)),
+);
 const SHELF_POS = new THREE.Vector3(-19, 0, -13);
 const PLANT_POS: THREE.Vector3[] = [
   new THREE.Vector3(-20, 0, -14),
@@ -103,25 +110,39 @@ function makeSignTexture(text: string): THREE.CanvasTexture {
 
 // Small billboarded nameplate that floats above a desk so it's readable
 // even when the character wanders off — sprites always face the camera.
+// White text (max contrast at small on-screen sizes) inside an
+// accent-colored outline; font auto-shrinks so long ids never clip.
 function makeLabelSprite(text: string, color: string): THREE.Sprite {
   const canvas = document.createElement("canvas");
-  canvas.width = 256;
-  canvas.height = 64;
+  canvas.width = 384;
+  canvas.height = 96;
   const ctx = canvas.getContext("2d")!;
-  ctx.font = "bold 26px system-ui, sans-serif";
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
+  const maxTextWidth = canvas.width - 28;
+  let fontSize = 36;
+  while (fontSize > 16) {
+    ctx.font = `bold ${fontSize}px system-ui, sans-serif`;
+    if (ctx.measureText(text).width <= maxTextWidth) break;
+    fontSize -= 2;
+  }
   const textWidth = ctx.measureText(text).width;
-  const padX = 14;
-  const boxW = Math.min(canvas.width - 8, textWidth + padX * 2);
-  ctx.fillStyle = "rgba(7,7,7,0.78)";
-  ctx.fillRect(canvas.width / 2 - boxW / 2, 14, boxW, 36);
-  ctx.fillStyle = color;
-  ctx.fillText(text, canvas.width / 2, 33);
+  const boxW = Math.min(canvas.width - 4, textWidth + 32);
+  const boxH = fontSize + 24;
+  const boxX = canvas.width / 2 - boxW / 2;
+  const boxY = canvas.height / 2 - boxH / 2;
+  ctx.fillStyle = "rgba(5,6,10,0.88)";
+  ctx.fillRect(boxX, boxY, boxW, boxH);
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 3;
+  ctx.strokeRect(boxX + 1.5, boxY + 1.5, boxW - 3, boxH - 3);
+  ctx.fillStyle = "#ffffff";
+  ctx.fillText(text, canvas.width / 2, canvas.height / 2 + 1);
   const tex = new THREE.CanvasTexture(canvas);
   tex.colorSpace = THREE.SRGBColorSpace;
   const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: false }));
-  sprite.scale.set(1.7, 1.7 * (canvas.height / canvas.width), 1);
+  const worldW = 2.5;
+  sprite.scale.set(worldW, worldW * (canvas.height / canvas.width), 1);
   return sprite;
 }
 
@@ -150,6 +171,7 @@ interface AgentRig {
   moving: boolean;
   seated: boolean;
   wasWorking: boolean;
+  inMeeting: boolean;
   nextWanderAt: number;
 }
 
@@ -229,11 +251,86 @@ export function AgentDeck({
     sun.position.set(10, 20, 10);
     scene.add(sun);
 
-    // ---- Floor: single light desk-floor plane against the dark void, no grid ----
+    // ---- Floor: light desk-floor plane against the dark void, with faint tile seams ----
     const floorMat = new THREE.MeshStandardMaterial({ color: 0xd7dbe3, roughness: 0.85 });
     const floor = new THREE.Mesh(new THREE.PlaneGeometry(FLOOR_W, FLOOR_D), floorMat);
     floor.rotation.x = -Math.PI / 2;
     scene.add(floor);
+
+    const seamPts: number[] = [];
+    const seamSpacing = 7;
+    for (let x = -FLOOR_W / 2 + seamSpacing; x < FLOOR_W / 2; x += seamSpacing) {
+      seamPts.push(x, 0.01, -FLOOR_D / 2, x, 0.01, FLOOR_D / 2);
+    }
+    for (let z = -FLOOR_D / 2 + seamSpacing; z < FLOOR_D / 2; z += seamSpacing) {
+      seamPts.push(-FLOOR_W / 2, 0.01, z, FLOOR_W / 2, 0.01, z);
+    }
+    const seamGeo = new THREE.BufferGeometry();
+    seamGeo.setAttribute("position", new THREE.Float32BufferAttribute(seamPts, 3));
+    scene.add(new THREE.LineSegments(seamGeo, new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.07 })));
+
+    // ---- Ceiling truss + perimeter mullions: thin, semi-transparent, sparse —
+    // tuned down from a first pass that used dense near-black beams, which
+    // read as a solid black grid over the floor from steep top-down angles. ----
+    const trussMat = new THREE.MeshStandardMaterial({ color: 0x5c6785, transparent: true, opacity: 0.35 });
+    const trussY = 9.5;
+    const spanX = FLOOR_W * 0.85;
+    const spanZ = FLOOR_D * 0.85;
+    for (let i = 0; i < 4; i++) {
+      const beam = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.12, spanZ), trussMat);
+      beam.position.set(-spanX / 2 + (i / 3) * spanX, trussY, 0);
+      scene.add(beam);
+    }
+    for (let i = 0; i < 3; i++) {
+      const beam = new THREE.Mesh(new THREE.BoxGeometry(spanX, 0.12, 0.12), trussMat);
+      beam.position.set(0, trussY, -spanZ / 2 + (i / 2) * spanZ);
+      scene.add(beam);
+    }
+    const mullionMat = new THREE.MeshStandardMaterial({ color: 0x9aa3ba, transparent: true, opacity: 0.4 });
+    const mullionH = 3.0;
+    function addMullions(x1: number, z1: number, x2: number, z2: number, count: number) {
+      for (let i = 0; i < count; i++) {
+        const t = i / (count - 1);
+        const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, mullionH, 6), mullionMat);
+        pole.position.set(THREE.MathUtils.lerp(x1, x2, t), mullionH / 2, THREE.MathUtils.lerp(z1, z2, t));
+        scene.add(pole);
+      }
+    }
+    const hx = FLOOR_W / 2;
+    const hz = FLOOR_D / 2;
+    addMullions(-hx, -hz, hx, -hz, 6);
+    addMullions(-hx, hz, hx, hz, 6);
+    addMullions(-hx, -hz, -hx, hz, 5);
+    addMullions(hx, -hz, hx, hz, 5);
+
+    // ---- Conference room: glass-walled, with a table + 6 chairs where agents periodically hold meetings ----
+    const glassMat = new THREE.MeshStandardMaterial({ color: 0x9fd8ff, transparent: true, opacity: 0.16, roughness: 0.15 });
+    const roomWallH = 3.0;
+    function addGlassWall(w: number, d: number, x: number, z: number) {
+      const wall = new THREE.Mesh(new THREE.BoxGeometry(w, roomWallH, d), glassMat);
+      wall.position.set(x, roomWallH / 2, z);
+      scene.add(wall);
+    }
+    addGlassWall(MEETING_ROOM_W, 0.12, MEETING_CENTER.x, MEETING_CENTER.z - MEETING_ROOM_D / 2);
+    addGlassWall(MEETING_ROOM_W, 0.12, MEETING_CENTER.x, MEETING_CENTER.z + MEETING_ROOM_D / 2);
+    addGlassWall(0.12, MEETING_ROOM_D, MEETING_CENTER.x - MEETING_ROOM_W / 2, MEETING_CENTER.z);
+    addGlassWall(0.12, MEETING_ROOM_D, MEETING_CENTER.x + MEETING_ROOM_W / 2, MEETING_CENTER.z);
+    const meetingTable = new THREE.Mesh(new THREE.BoxGeometry(3.6, 0.5, 1.6), new THREE.MeshStandardMaterial({ color: 0x2a3346 }));
+    meetingTable.position.set(MEETING_CENTER.x, 0.5, MEETING_CENTER.z);
+    scene.add(meetingTable);
+    MEETING_SEATS.forEach((seat) => {
+      const mChair = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.45, 0.5), new THREE.MeshStandardMaterial({ color: 0x475569 }));
+      mChair.position.set(seat.x, 0.22, seat.z);
+      scene.add(mChair);
+    });
+    const meetingLabel = makeLabelSprite("CONFERENCE ROOM", "#38bdf8");
+    meetingLabel.position.set(MEETING_CENTER.x, roomWallH + 0.7, MEETING_CENTER.z);
+    scene.add(meetingLabel);
+
+    // ---- Lounge couch ----
+    const couch = new THREE.Mesh(new THREE.BoxGeometry(3.2, 0.8, 1.3), new THREE.MeshStandardMaterial({ color: 0x2e4a6b }));
+    couch.position.set(LANDMARKS[1].x, 0.4, LANDMARKS[1].z);
+    scene.add(couch);
 
     // ---- Reception desk: branded sign + a freestanding monitor plinth ----
     const deskBody = new THREE.Mesh(new THREE.BoxGeometry(3.4, 1.0, 0.7), new THREE.MeshStandardMaterial({ color: 0x0e1522 }));
@@ -348,6 +445,10 @@ export function AgentDeck({
       deskMesh.position.set(pos.x, 0.35, pos.z);
       scene.add(deskMesh);
 
+      const chair = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.42, 0.5), new THREE.MeshStandardMaterial({ color: 0x3f4a5c }));
+      chair.position.set(pos.x, 0.21, pos.z + 0.65);
+      scene.add(chair);
+
       // Accent-colored edge strip so a desk reads as "whose" at a glance,
       // even before the nameplate above it is legible.
       const nameBar = new THREE.Mesh(
@@ -357,7 +458,7 @@ export function AgentDeck({
       nameBar.position.set(pos.x, 0.71, pos.z + 0.46);
       scene.add(nameBar);
 
-      const label = makeLabelSprite(spec.name.toUpperCase(), spec.accent);
+      const label = makeLabelSprite(spec.id.toUpperCase(), spec.accent);
       label.position.set(pos.x, 1.9, pos.z);
       scene.add(label);
 
@@ -409,7 +510,7 @@ export function AgentDeck({
       rigs.set(spec.id, {
         group, legL, legR, armL, armR, torso, head, monitor, monitorMat, deskLight,
         desk, walkT: 0, target: group.position.clone(),
-        moving: false, seated: false, wasWorking: false,
+        moving: false, seated: false, wasWorking: false, inMeeting: false,
         nextWanderAt: performance.now() + 1500 + Math.random() * 3000,
       });
     }
@@ -446,10 +547,14 @@ export function AgentDeck({
     const resizeObserver = new ResizeObserver(onResize);
     resizeObserver.observe(host);
 
-    // ---- Animation loop: walk physics, particle drift, render ----
+    // ---- Animation loop: walk physics, particle drift, meetings, render ----
     let raf = 0;
     let lastTime = 0;
     const startTime = performance.now();
+    let meetingActive = false;
+    let meetingUntil = 0;
+    let meetingNextAt = startTime + 8000 + Math.random() * 12000;
+    const meetingAttendees: AgentId[] = [];
 
     function tick(now: number) {
       raf = requestAnimationFrame(tick);
@@ -473,31 +578,74 @@ export function AgentDeck({
         f.mesh.rotation.y += f.spin * dt * 0.7;
       }
 
+      // Stand-up meeting scheduler: periodically pull a few currently-idle
+      // agents to the conference room, hold them there a while, then
+      // release them back to their normal desk/wander behavior. Purely
+      // decorative — an agent that starts real work is released early
+      // (below) so it never delays an actual cycle.
+      if (!meetingActive && now > meetingNextAt) {
+        const idle = Array.from(rigs.entries()).filter(([aid]) => (latestRef.current.statuses[aid]?.live ?? "idle") !== "working");
+        if (idle.length >= 2) {
+          const count = Math.min(idle.length, MEETING_SEATS.length, 3 + Math.floor(Math.random() * 4));
+          const shuffled = idle.slice().sort(() => Math.random() - 0.5).slice(0, count);
+          meetingAttendees.length = 0;
+          shuffled.forEach(([aid, ar], i) => {
+            ar.target = MEETING_SEATS[i].clone();
+            ar.moving = true;
+            ar.seated = false;
+            ar.inMeeting = true;
+            meetingAttendees.push(aid);
+          });
+          meetingActive = true;
+          meetingUntil = now + 18000 + Math.random() * 12000;
+        } else {
+          meetingNextAt = now + 10000;
+        }
+      }
+      if (meetingActive && now > meetingUntil) {
+        meetingActive = false;
+        meetingNextAt = now + 40000 + Math.random() * 40000;
+        for (const aid of meetingAttendees) {
+          const ar = rigs.get(aid);
+          if (ar) {
+            ar.inMeeting = false;
+            ar.seated = false;
+            ar.nextWanderAt = now;
+          }
+        }
+        meetingAttendees.length = 0;
+      }
+
       for (const [id, r] of rigs) {
         const info = latestRef.current.statuses[id];
         const live: AgentLive = info?.live ?? "idle";
         const working = live === "working";
 
-        // State transition: start/stop working -> walk to/from desk.
-        if (working && !r.wasWorking) {
-          r.target = r.desk.clone().setZ(r.desk.z + 0.9);
-          r.moving = true;
-          r.seated = false;
-        } else if (!working && r.wasWorking) {
-          r.seated = false;
+        // Real work always outranks a simulated meeting.
+        if (r.inMeeting && working) r.inMeeting = false;
+
+        if (!r.inMeeting) {
+          // State transition: start/stop working -> walk to/from desk.
+          if (working && !r.wasWorking) {
+            r.target = r.desk.clone().setZ(r.desk.z + 0.9);
+            r.moving = true;
+            r.seated = false;
+          } else if (!working && r.wasWorking) {
+            r.seated = false;
+          }
+
+          // Idle wander: occasionally head to a landmark and back.
+          if (!working && !r.moving && now > r.nextWanderAt) {
+            const goHome = Math.random() < 0.4;
+            r.target = goHome
+              ? r.desk.clone().setZ(r.desk.z + 0.9)
+              : LANDMARKS[Math.floor(Math.random() * LANDMARKS.length)].clone();
+            r.moving = true;
+            r.seated = false;
+            r.nextWanderAt = now + 4000 + Math.random() * 5000;
+          }
         }
         r.wasWorking = working;
-
-        // Idle wander: occasionally head to a landmark and back.
-        if (!working && !r.moving && now > r.nextWanderAt) {
-          const goHome = Math.random() < 0.4;
-          r.target = goHome
-            ? r.desk.clone().setZ(r.desk.z + 0.9)
-            : LANDMARKS[Math.floor(Math.random() * LANDMARKS.length)].clone();
-          r.moving = true;
-          r.seated = false;
-          r.nextWanderAt = now + 4000 + Math.random() * 5000;
-        }
 
         if (r.moving) {
           const toTarget = r.target.clone().sub(r.group.position);
@@ -506,7 +654,7 @@ export function AgentDeck({
             r.moving = false;
             r.group.position.copy(r.target);
             const atDesk = r.target.distanceTo(r.desk.clone().setZ(r.desk.z + 0.9)) < 0.01;
-            if (atDesk && working) r.seated = true;
+            if ((atDesk && working) || r.inMeeting) r.seated = true;
           } else {
             toTarget.normalize();
             const speed = 2.4;
