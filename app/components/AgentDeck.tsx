@@ -56,7 +56,8 @@ const MEETING_SEATS: { x: number; z: number; ry: number }[] = [-1.8, 0, 1.8].fla
   { x: MEETING_CENTER.x + dx, z: MEETING_CENTER.z - 1.45, ry: Math.PI },
   { x: MEETING_CENTER.x + dx, z: MEETING_CENTER.z + 1.45, ry: 0 },
 ]);
-const SHELF_POS = new THREE.Vector3(-15, 0, -10);
+const SHELF_POS = new THREE.Vector3(-19, 0, -13);
+const FILING_CABINET_POS = new THREE.Vector3(-11, 0, -13);
 const PLANT_POS: THREE.Vector3[] = [
   new THREE.Vector3(-16, 0, -11),
   new THREE.Vector3(-15, 0, 10),
@@ -471,6 +472,46 @@ export function AgentDeck({
       const book = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.5, 0.32), Lam(c));
       book.position.set(SHELF_POS.x - 0.5 + i * 0.16, 1.06, SHELF_POS.z);
       scene.add(book);
+    });
+    const cabinet = new THREE.Mesh(new THREE.BoxGeometry(0.7, 1.1, 0.5), Lam(0x5a6472));
+    cabinet.position.set(FILING_CABINET_POS.x, 0.55, FILING_CABINET_POS.z);
+    cabinet.castShadow = true;
+    scene.add(cabinet);
+    const cabinetHandle = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.03, 0.03), Basic(0xaabbcc));
+    cabinetHandle.position.set(FILING_CABINET_POS.x, 0.7, FILING_CABINET_POS.z + 0.26);
+    scene.add(cabinetHandle);
+
+    // Engineering room theme prop: a small server rack in the room's
+    // west corner (center {-15,-3}, size 10x9 -> interior x:[-20,-10]).
+    const rackCenter = { x: -19, z: -6.5 };
+    const rack = new THREE.Mesh(new THREE.BoxGeometry(0.6, 1.6, 0.6), Lam(0x1f2937));
+    rack.position.set(rackCenter.x, 0.8, rackCenter.z);
+    rack.castShadow = true;
+    scene.add(rack);
+    [0x22c55e, 0x3b82f6, 0xef4444].forEach((c, i) => {
+      const led = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.03, 0.03), Basic(c));
+      led.position.set(rackCenter.x, 0.3 + i * 0.4, rackCenter.z + 0.31);
+      scene.add(led);
+    });
+
+    // Growth & Design room theme prop: a freestanding mood-board panel
+    // on a simple stand, standing in the room's west corner (center
+    // {-15,7}, size 10x9 -> interior x:[-20,-10]).
+    const boardCenter = { x: -19, z: 4.5 };
+    const boardStandL = new THREE.Mesh(new THREE.BoxGeometry(0.04, 1.2, 0.04), Lam(0x8a93a8));
+    boardStandL.position.set(boardCenter.x - 0.6, 0.6, boardCenter.z);
+    scene.add(boardStandL);
+    const boardStandR = new THREE.Mesh(new THREE.BoxGeometry(0.04, 1.2, 0.04), Lam(0x8a93a8));
+    boardStandR.position.set(boardCenter.x + 0.6, 0.6, boardCenter.z);
+    scene.add(boardStandR);
+    const board = new THREE.Mesh(new THREE.BoxGeometry(1.3, 0.9, 0.04), Lam(0xf5f7fa));
+    board.position.set(boardCenter.x, 1.05, boardCenter.z);
+    board.castShadow = true;
+    scene.add(board);
+    [0xec4899, 0x38bdf8, 0xfacc15].forEach((c, i) => {
+      const swatch = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.14, 0.01), Basic(c));
+      swatch.position.set(boardCenter.x - 0.4 + i * 0.4, 1.15, boardCenter.z + 0.025);
+      scene.add(swatch);
     });
     PLANT_POS.forEach((p) => {
       const pot = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.28, 0.35, 10), Lam(0x334155));
