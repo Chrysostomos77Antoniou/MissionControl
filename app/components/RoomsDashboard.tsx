@@ -16,6 +16,7 @@ const LABEL: Record<AgentLive, string> = { working: "Working", done: "Ready", id
 export function RoomsDashboard() {
   const [status, setStatus] = useState<Record<string, AgentStatusInfo>>({});
   const [open, setOpen] = useState<AgentId | null>(null);
+  const [orchOpen, setOrchOpen] = useState(false);
   const [selected, setSelected] = useState<Set<AgentId>>(new Set());
   const [running, setRunning] = useState(false);
   const [orchMsgs, setOrchMsgs] = useState<{ role: "you" | "agent"; text: string }[]>([]);
@@ -60,6 +61,9 @@ export function RoomsDashboard() {
     try {
       const raw = localStorage.getItem("mc_chat_orchestrator");
       const parsed = raw ? JSON.parse(raw) : null;
+      // One-time sync from an external system (localStorage) after mount —
+      // matches the identical pattern in ChatPanel.tsx's own history load.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       if (Array.isArray(parsed) && parsed.length) setOrchMsgs(parsed);
     } catch {
       /* ignore */
@@ -79,10 +83,15 @@ export function RoomsDashboard() {
 
   return (
     <>
-      <div className="flex gap-3 h-full">
-        {/* Roster — compact left rail. Click a row to open a private
+      {/* The office is now the full stage — roster and the Orchestrator
+          trigger float on top of it instead of eating fixed side columns,
+          so the 3D scene gets the whole screen. */}
+      <div className="relative h-full w-full rounded-xl overflow-hidden">
+        <AgentDeck statuses={status} selected={selected} onToggleSelect={toggleSelected} onOpen={setOpen} />
+
+        {/* Roster — floating top-left. Click a row to open a private
             channel; click its checkbox to select it for a manual Run. */}
-        <aside className="w-[190px] shrink-0 glass rounded-xl p-3 flex flex-col overflow-y-auto">
+        <aside className="absolute top-3 left-3 w-[190px] max-h-[calc(100%-1.5rem)] glass rounded-xl p-3 flex flex-col overflow-y-auto">
           <div className="flex items-center justify-between mb-2.5 px-1">
             <div className="font-display text-[11px] uppercase tracking-wider" style={{ color: "var(--text-dim)" }}>
               Agents · {AGENTS.length}
@@ -154,31 +163,40 @@ export function RoomsDashboard() {
           </div>
         </aside>
 
-        {/* The office — the main stage. */}
-        <div className="flex-1 min-w-0 rounded-xl overflow-hidden">
-          <AgentDeck statuses={status} selected={selected} onToggleSelect={toggleSelected} onOpen={setOpen} />
-        </div>
-
-        {/* Orchestrator — right rail. */}
-        <main
-          className="w-[360px] shrink-0 glass rounded-xl p-4 flex flex-col"
-          style={{
-            borderColor: "rgba(255,174,59,0.28)",
-            background: "linear-gradient(180deg, rgba(255,150,40,0.05), var(--surface))",
-            boxShadow: "0 0 50px -22px rgba(255,150,40,0.4)",
-          }}
+        {/* Orchestrator trigger — floating top-right. Opens the same chat
+            that used to live in a permanent right-hand column. */}
+        <button
+          onClick={() => setOrchOpen(true)}
+          className="absolute top-3 right-3 glass rounded-xl px-3 py-2 flex items-center gap-2 transition hover:brightness-125"
+          style={{ borderColor: "rgba(255,174,59,0.28)" }}
         >
-          <header className="flex items-center gap-3 mb-3 pb-3" style={{ borderBottom: "1px solid var(--border)" }}>
-            <Monogram name="Orchestrator Core" accent="var(--amber)" size={38} />
-            <div className="leading-snug">
-              <div className="font-display text-sm" style={{ color: "var(--text)" }}>
-                Orchestrator
-              </div>
-              <div className="text-[10px]" style={{ color: "var(--text-dim)" }}>
-                Chief of Staff · Haiku 4.5
+          <Monogram name="Orchestrator Core" accent="var(--amber)" size={26} />
+          <div className="leading-tight text-left">
+            <div className="font-display text-[11px]" style={{ color: "var(--text)" }}>
+              Orchestrator
+            </div>
+            <div className="text-[9px]" style={{ color: "var(--text-dim)" }}>
+              Tap to chat
+            </div>
+          </div>
+        </button>
+      </div>
+
+      {/* Orchestrator chat — Dialog, same pattern as the per-agent chat below. */}
+      <Dialog open={orchOpen} onOpenChange={setOrchOpen}>
+        <DialogContent style={{ width: "min(560px, 94vw)", height: "min(82vh, 640px)" }}>
+          <DialogHeader>
+            <div className="flex items-center gap-3">
+              <Monogram name="Orchestrator Core" accent="var(--amber)" size={34} />
+              <div className="leading-tight">
+                <DialogTitle>Orchestrator</DialogTitle>
+                <DialogDescription>Chief of Staff · Haiku 4.5</DialogDescription>
               </div>
             </div>
-          </header>
+            <DialogClose className="text-[11px]" style={{ color: "var(--text-dim)" }}>
+              ✕ Close
+            </DialogClose>
+          </DialogHeader>
           <div className="flex-1 min-h-0">
             <ChatPanel
               endpoint="/api/chat"
@@ -190,8 +208,8 @@ export function RoomsDashboard() {
               placeholder="Ask for a status report or issue a directive…"
             />
           </div>
-        </main>
-      </div>
+        </DialogContent>
+      </Dialog>
 
       {/* Radix Dialog (shadcn/ui pattern) instead of the old hand-rolled
           `fixed inset-0` overlay — gets real focus-trapping, Escape-to-close,

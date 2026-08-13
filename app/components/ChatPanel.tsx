@@ -799,7 +799,7 @@ export function ChatPanel({
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && send()}
-          className="flex-1 text-sm px-3 py-2 rounded-lg"
+          className="flex-1 min-w-0 text-sm px-3 py-2 rounded-lg"
           style={{ background: "var(--bg)", border: "1px solid var(--border)", color: "var(--text)" }}
           placeholder={listening ? "Listening…" : "Type a message…"}
         />

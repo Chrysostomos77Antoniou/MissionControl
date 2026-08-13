@@ -1,89 +1,24 @@
 "use client";
-import { useEffect, useRef } from "react";
-import type Phaser from "phaser";
+import { useEffect, useRef, useState } from "react";
+import * as THREE from "three";
+import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { AGENTS, type AgentSpec } from "../../agents/registry";
 import type { AgentId } from "../../lib/types";
 import type { AgentStatusInfo, AgentLive } from "../../lib/agent-status";
 import { TOOL_VISUAL, DEFAULT_TOOL_VISUAL } from "../../lib/tool-visual";
 
-const OUTER_PAD = 14;
-const HEADER_H = 22;
-const FLOOR_PAD = 10;
-const DOOR_W = 40;
+// Modeled on Gaurav2693/ai-office (github.com/Gaurav2693/ai-office, verified
+// live at skill-deploy-qmm7droauc.vercel.app): a 3D voxel-style office —
+// orbital camera, desks with glowing monitors, a glass-walled meeting room,
+// landmark furniture agents wander to, a day/night light cycle, and a
+// "lights off" neon mode. No external model assets, same as that project's
+// own primitives-only approach and this codebase's prior Phaser scene.
 
-// Dark, "professional/futuristic" palette (not the cream floor-plan look) —
-// matching the AI Agent Session Center / OpenClaw office reference video.
-const FLOOR_COLOR = 0x1b2130;
-const WALL_COLOR = 0x3a4560;
-const HEADER_BAR_COLOR = 0x0d111c;
-const DOOR_COLOR = 0x5a6a90;
-const DESK_COLOR = 0x2a3346;
-const FURNITURE_COLOR = 0x2a3346;
-const PLANT_COLOR = 0x2f9e5c;
+type Zone = "command" | "arrivals" | "workspace";
 
-type RoomKind = "briefing" | "meeting" | "arrivals" | "workspace" | "command" | "lounge" | "pantry" | "server";
-
-// Each room gets its own accent color — a tinted rug, header stripe, and
-// glow fixtures — so the floor plan reads as varied and colorful instead of
-// one flat dark tone throughout.
-const ROOM_TINT: Record<RoomKind, number> = {
-  briefing: 0xf97316,
-  meeting: 0x22c55e,
-  arrivals: 0xa855f7,
-  workspace: 0x3b82f6,
-  command: 0xef4444,
-  lounge: 0xec4899,
-  pantry: 0xeab308,
-  server: 0x14b8a6,
-};
-
-interface RoomDef {
-  key: string;
-  label: string;
-  x: number;
-  y: number;
-  w: number;
-  h: number;
-  kind: RoomKind;
-}
-
-// Fixed hand-laid floor plan (not a repeated grid) — 8 distinctly-purposed
-// rooms sized and connected the way the reference office is: 3 rooms across
-// the top, 2 big rooms in the middle, 3 rooms across the bottom.
-const ROOM_DEFS: RoomDef[] = [
-  { key: "briefing", label: "BRIEFING ROOM", x: 0, y: 0, w: 280, h: 210, kind: "briefing" },
-  { key: "meeting", label: "MEETING ROOM", x: 280, y: 0, w: 280, h: 210, kind: "meeting" },
-  { key: "arrivals", label: "ARRIVALS", x: 560, y: 0, w: 280, h: 210, kind: "arrivals" },
-  { key: "workspace", label: "WORKSPACE", x: 0, y: 210, w: 430, h: 220, kind: "workspace" },
-  { key: "command", label: "COMMAND CENTER", x: 430, y: 210, w: 410, h: 220, kind: "command" },
-  { key: "lounge", label: "LOUNGE", x: 0, y: 430, w: 280, h: 210, kind: "lounge" },
-  { key: "pantry", label: "PANTRY", x: 280, y: 430, w: 280, h: 210, kind: "pantry" },
-  { key: "server", label: "SERVER ROOM", x: 560, y: 430, w: 280, h: 210, kind: "server" },
-];
-
-// Doorway connections — enough to make every room reachable from every
-// other, not every possible touching pair (that would wall-to-wall the
-// place with doors).
-const DOOR_LINKS: [string, string][] = [
-  ["briefing", "meeting"],
-  ["meeting", "arrivals"],
-  ["briefing", "workspace"],
-  ["arrivals", "command"],
-  ["workspace", "command"],
-  ["workspace", "lounge"],
-  ["lounge", "pantry"],
-  ["pantry", "server"],
-  ["command", "server"],
-];
-
-// Which room each agent's desk lives in — grouped by function, the way a
-// real office seats people: DevOps/Cybersecurity in the watch room, the
-// community-facing role at the front desk, everyone else in the open
-// workspace. Briefing/Meeting/Lounge/Pantry/Server stay decorative-only
-// (transient/atmospheric), matching how the reference video uses them.
-const AGENT_ROOM: Record<AgentId, string> = {
-  devops: "command",
+const AGENT_ZONE: Record<AgentId, Zone> = {
   cybersecurity: "command",
+  devops: "command",
   community: "arrivals",
   engineering: "workspace",
   developer: "workspace",
@@ -96,57 +31,56 @@ const AGENT_ROOM: Record<AgentId, string> = {
   legal: "workspace",
 };
 
-function hexToNum(hex: string): number {
-  return parseInt(hex.replace("#", ""), 16);
+const FLOOR_W = 42;
+const FLOOR_D = 32;
+
+// Landmarks idle agents wander to — mirrors ai-office's "water cooler,
+// center, window, lounge" destination set.
+const LANDMARKS: THREE.Vector3[] = [
+  new THREE.Vector3(2, 0, 1), // water cooler
+  new THREE.Vector3(-7, 0, 9), // lounge
+  new THREE.Vector3(6, 0, -2), // center/window
+];
+
+function hexToColor(hex: string): THREE.Color {
+  return new THREE.Color(hex);
 }
 
-function deskGrid(
-  floor: { x0: number; y0: number; x1: number; y1: number },
-  count: number,
-  cols: number,
-): { x: number; y: number }[] {
+function deskPositions(count: number, cols: number, cx: number, cz: number, spacing = 3.4) {
   const rows = Math.ceil(count / cols);
-  const colW = (floor.x1 - floor.x0) / cols;
-  const rowH = (floor.y1 - floor.y0) / rows;
-  const out: { x: number; y: number }[] = [];
+  const out: { x: number; z: number }[] = [];
+  const w = (cols - 1) * spacing;
+  const d = (rows - 1) * spacing;
   for (let i = 0; i < count; i++) {
     const c = i % cols;
     const r = Math.floor(i / cols);
-    out.push({ x: floor.x0 + colW * c + colW / 2, y: floor.y0 + rowH * r + rowH / 2 });
+    out.push({ x: cx - w / 2 + c * spacing, z: cz - d / 2 + r * spacing });
   }
   return out;
 }
 
-interface RoomHandles {
-  clickZone: Phaser.GameObjects.Rectangle;
-  glow: Phaser.GameObjects.Rectangle;
-  charContainer: Phaser.GameObjects.Container;
-  legL: Phaser.GameObjects.Rectangle;
-  legR: Phaser.GameObjects.Rectangle;
-  torso: Phaser.GameObjects.Rectangle;
-  head: Phaser.GameObjects.Arc;
-  nameText: Phaser.GameObjects.Text;
-  badgeDot: Phaser.GameObjects.Arc;
-  badgeText: Phaser.GameObjects.Text;
-  checkbox: Phaser.GameObjects.Rectangle;
-  checkMark: Phaser.GameObjects.Text;
-  statusText: Phaser.GameObjects.Text;
-  consoleLights: Phaser.GameObjects.Image[];
-  bobTween: Phaser.Tweens.Tween;
-  glowTween: Phaser.Tweens.Tween | null;
-  wiggleTween: Phaser.Tweens.Tween | null;
-  moveTween: Phaser.Tweens.Tween | null;
-  wanderEvent: Phaser.Time.TimerEvent;
-  floor: { x0: number; y0: number; x1: number; y1: number };
-  consolePos: { x: number; y: number };
-  wasWorking: boolean;
+interface AgentRig {
+  group: THREE.Group; // whole character, moved for walking
+  legL: THREE.Mesh;
+  legR: THREE.Mesh;
+  torso: THREE.Mesh;
+  head: THREE.Mesh;
+  monitor: THREE.Mesh;
+  monitorMat: THREE.MeshStandardMaterial;
+  deskLight: THREE.PointLight;
+  badge: THREE.Sprite | null;
+  desk: THREE.Vector3;
+  walkT: number; // walk-cycle phase
+  target: THREE.Vector3;
+  moving: boolean;
   seated: boolean;
+  wasWorking: boolean;
+  nextWanderAt: number;
 }
 
 export function AgentDeck({
   statuses,
   selected,
-  onToggleSelect,
   onOpen,
 }: {
   statuses: Record<string, AgentStatusInfo>;
@@ -155,590 +89,351 @@ export function AgentDeck({
   onOpen: (id: AgentId) => void;
 }) {
   const hostRef = useRef<HTMLDivElement>(null);
-  const gameRef = useRef<Phaser.Game | null>(null);
-  const roomsRef = useRef<Map<AgentId, RoomHandles>>(new Map());
-  const latestRef = useRef({ statuses, selected, onToggleSelect, onOpen });
-  latestRef.current = { statuses, selected, onToggleSelect, onOpen };
+  const rigsRef = useRef<Map<AgentId, AgentRig>>(new Map());
+  const latestRef = useRef({ statuses, selected, onOpen });
+  const [cyberpunk, setCyberpunk] = useState(false);
+  const cyberpunkRef = useRef(cyberpunk);
 
-  // Boot the game once. All later prop changes are applied imperatively via
-  // roomsRef in the effect below — recreating the Phaser.Game on every 10s
-  // status poll would restart every walk/bob tween and freeze the room
-  // between polls instead of feeling continuously alive.
+  // Mirror the latest props/state into refs so the rAF loop (a closure set
+  // up once in the mount effect below) always reads current values instead
+  // of the ones captured at mount.
+  useEffect(() => {
+    latestRef.current = { statuses, selected, onOpen };
+  }, [statuses, selected, onOpen]);
+  useEffect(() => {
+    cyberpunkRef.current = cyberpunk;
+  }, [cyberpunk]);
+
   useEffect(() => {
     if (!hostRef.current) return;
-    let disposed = false;
+    const host = hostRef.current;
 
-    (async () => {
-      const Phaser = (await import("phaser")).default;
-      if (disposed || !hostRef.current) return;
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(45, host.clientWidth / host.clientHeight, 0.1, 200);
+    camera.position.set(0, 24, 26);
 
-      const prefersReducedMotion =
-        typeof window !== "undefined" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+    renderer.setSize(host.clientWidth, host.clientHeight);
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
+    renderer.shadowMap.enabled = true;
+    host.appendChild(renderer.domElement);
 
-      const bx0 = OUTER_PAD;
-      const by0 = OUTER_PAD;
-      const bx1 = OUTER_PAD + Math.max(...ROOM_DEFS.map((r) => r.x + r.w));
-      const by1 = OUTER_PAD + Math.max(...ROOM_DEFS.map((r) => r.y + r.h));
-      const width = bx1 + OUTER_PAD;
-      const height = by1 + OUTER_PAD;
-      const byKey = new Map(ROOM_DEFS.map((r) => [r.key, r]));
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.target.set(0, 0, 0);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.08;
+    controls.minDistance = 12;
+    controls.maxDistance = 55;
+    controls.maxPolarAngle = Math.PI * 0.48; // never dip below the floor
+    controls.update();
 
-      class DeckScene extends Phaser.Scene {
-        moteTexture!: string;
+    // ---- Lighting (day/night cycle drives sun + ambient below) ----
+    const ambient = new THREE.AmbientLight(0xffffff, 0.55);
+    scene.add(ambient);
+    const sun = new THREE.DirectionalLight(0xffffff, 1.0);
+    sun.position.set(10, 22, 8);
+    sun.castShadow = true;
+    sun.shadow.mapSize.set(1024, 1024);
+    scene.add(sun);
 
-        // Phaser renders Text objects to an offscreen canvas at `resolution`
-        // pixels-per-CSS-pixel, then scales that bitmap. Scale.FIT stretches
-        // the whole game canvas well above 1x on most windows, so text left
-        // at the default resolution (1) blurs badly once magnified — a
-        // higher resolution here renders it dense enough to stay crisp.
-        mkText(x: number, y: number, str: string, style: Phaser.Types.GameObjects.Text.TextStyle) {
-          return this.add.text(x, y, str, { resolution: 4, ...style });
+    // ---- Floor ----
+    const floorMat = new THREE.MeshStandardMaterial({ color: 0x1b2130, roughness: 0.9 });
+    const floor = new THREE.Mesh(new THREE.PlaneGeometry(FLOOR_W, FLOOR_D), floorMat);
+    floor.rotation.x = -Math.PI / 2;
+    floor.receiveShadow = true;
+    scene.add(floor);
+    const grid = new THREE.GridHelper(Math.max(FLOOR_W, FLOOR_D), 24, 0x3a4560, 0x262c3d);
+    (grid.material as THREE.Material).opacity = 0.35;
+    (grid.material as THREE.Material).transparent = true;
+    scene.add(grid);
+
+    // ---- Meeting room (glass-walled box, back-right) ----
+    const meetingCenter = new THREE.Vector3(11, 0, -9);
+    const glassMat = new THREE.MeshPhysicalMaterial({
+      color: 0x8ecbff,
+      transparent: true,
+      opacity: 0.18,
+      roughness: 0.05,
+      transmission: 0.6,
+      metalness: 0,
+    });
+    const meetingWallGeo = new THREE.BoxGeometry(9, 3, 0.15);
+    const wallN = new THREE.Mesh(meetingWallGeo, glassMat);
+    wallN.position.set(meetingCenter.x, 1.5, meetingCenter.z - 4);
+    scene.add(wallN);
+    const wallS = wallN.clone();
+    wallS.position.set(meetingCenter.x, 1.5, meetingCenter.z + 4);
+    scene.add(wallS);
+    const sideGeo = new THREE.BoxGeometry(0.15, 3, 8);
+    const wallW = new THREE.Mesh(sideGeo, glassMat);
+    wallW.position.set(meetingCenter.x - 4.5, 1.5, meetingCenter.z);
+    scene.add(wallW);
+    const wallE = wallW.clone();
+    wallE.position.set(meetingCenter.x + 4.5, 1.5, meetingCenter.z);
+    scene.add(wallE);
+    const tableMat = new THREE.MeshStandardMaterial({ color: 0x2a3346 });
+    const table = new THREE.Mesh(new THREE.CylinderGeometry(2.4, 2.4, 0.5, 24), tableMat);
+    table.position.set(meetingCenter.x, 0.5, meetingCenter.z);
+    table.castShadow = true;
+    scene.add(table);
+
+    // ---- Landmarks: water cooler + lounge ----
+    const coolerMat = new THREE.MeshStandardMaterial({ color: 0x2f9e5c, emissive: 0x0f3a20 });
+    const cooler = new THREE.Mesh(new THREE.CylinderGeometry(0.4, 0.5, 1.6, 12), coolerMat);
+    cooler.position.copy(LANDMARKS[0]).setY(0.8);
+    cooler.castShadow = true;
+    scene.add(cooler);
+
+    const loungeMat = new THREE.MeshStandardMaterial({ color: 0x3a2e42 });
+    const sofa = new THREE.Mesh(new THREE.BoxGeometry(4, 0.9, 1.6), loungeMat);
+    sofa.position.set(LANDMARKS[1].x, 0.45, LANDMARKS[1].z);
+    sofa.castShadow = true;
+    scene.add(sofa);
+
+    // ---- Desks + agents, grouped by zone ----
+    const byZone = new Map<Zone, AgentSpec[]>();
+    for (const spec of AGENTS) {
+      const z = AGENT_ZONE[spec.id];
+      (byZone.get(z) ?? byZone.set(z, []).get(z)!).push(spec);
+    }
+    const zoneCenters: Record<Zone, { cx: number; cz: number; cols: number }> = {
+      command: { cx: -13, cz: -9, cols: 2 },
+      arrivals: { cx: -13, cz: 7, cols: 1 },
+      workspace: { cx: 1, cz: 5, cols: 3 },
+    };
+
+    const raycastTargets: THREE.Object3D[] = [];
+    const rigs = rigsRef.current;
+
+    function buildAgent(spec: AgentSpec, pos: { x: number; z: number }) {
+      const accent = hexToColor(spec.accent);
+      const desk = new THREE.Vector3(pos.x, 0, pos.z);
+
+      const deskMat = new THREE.MeshStandardMaterial({ color: 0x2a3346 });
+      const deskMesh = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.7, 0.9), deskMat);
+      deskMesh.position.set(pos.x, 0.35, pos.z);
+      deskMesh.castShadow = true;
+      deskMesh.receiveShadow = true;
+      scene.add(deskMesh);
+
+      const monitorMat = new THREE.MeshStandardMaterial({
+        color: 0x0d111c,
+        emissive: accent,
+        emissiveIntensity: 0.15,
+      });
+      const monitor = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.5, 0.06), monitorMat);
+      monitor.position.set(pos.x, 0.95, pos.z - 0.35);
+      scene.add(monitor);
+
+      const deskLight = new THREE.PointLight(accent.getHex(), 0, 3);
+      deskLight.position.set(pos.x, 1.2, pos.z - 0.3);
+      scene.add(deskLight);
+
+      // Simple voxel humanoid — torso + head + two legs (legs animate the walk).
+      const group = new THREE.Group();
+      const legMat = new THREE.MeshStandardMaterial({ color: accent, opacity: 0.85, transparent: true });
+      const legGeo = new THREE.BoxGeometry(0.18, 0.55, 0.18);
+      const legL = new THREE.Mesh(legGeo, legMat);
+      legL.position.set(-0.13, 0.275, 0);
+      legL.castShadow = true;
+      const legR = new THREE.Mesh(legGeo, legMat);
+      legR.position.set(0.13, 0.275, 0);
+      legR.castShadow = true;
+      const torsoMat = new THREE.MeshStandardMaterial({ color: accent });
+      const torso = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.6, 0.3), torsoMat);
+      torso.position.set(0, 0.85, 0);
+      torso.castShadow = true;
+      const headMat = new THREE.MeshStandardMaterial({ color: 0xf0d9b5 });
+      const head = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.32, 0.32), headMat);
+      head.position.set(0, 1.32, 0);
+      head.castShadow = true;
+      group.add(legL, legR, torso, head);
+      group.position.set(pos.x, 0, pos.z + 0.9);
+      scene.add(group);
+      raycastTargets.push(torso, head);
+      (torso.userData as { agentId: AgentId }).agentId = spec.id;
+      (head.userData as { agentId: AgentId }).agentId = spec.id;
+
+      rigs.set(spec.id, {
+        group,
+        legL,
+        legR,
+        torso,
+        head,
+        monitor,
+        monitorMat,
+        deskLight,
+        badge: null,
+        desk,
+        walkT: 0,
+        target: group.position.clone(),
+        moving: false,
+        seated: false,
+        wasWorking: false,
+        nextWanderAt: performance.now() + 1500 + Math.random() * 3000,
+      });
+    }
+
+    for (const [zone, specs] of byZone) {
+      const { cx, cz, cols } = zoneCenters[zone];
+      const positions = deskPositions(specs.length, cols, cx, cz);
+      specs.forEach((spec, i) => buildAgent(spec, positions[i]));
+    }
+
+    // ---- Click-to-open-chat via raycasting ----
+    const raycaster = new THREE.Raycaster();
+    const pointer = new THREE.Vector2();
+    function onClick(ev: MouseEvent) {
+      const rect = renderer.domElement.getBoundingClientRect();
+      pointer.x = ((ev.clientX - rect.left) / rect.width) * 2 - 1;
+      pointer.y = -((ev.clientY - rect.top) / rect.height) * 2 + 1;
+      raycaster.setFromCamera(pointer, camera);
+      const hits = raycaster.intersectObjects(raycastTargets, false);
+      if (hits.length > 0) {
+        const id = hits[0].object.userData.agentId as AgentId | undefined;
+        if (id) latestRef.current.onOpen(id);
+      }
+    }
+    renderer.domElement.addEventListener("click", onClick);
+
+    // ---- Resize ----
+    function onResize() {
+      if (!host) return;
+      camera.aspect = host.clientWidth / host.clientHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(host.clientWidth, host.clientHeight);
+    }
+    const resizeObserver = new ResizeObserver(onResize);
+    resizeObserver.observe(host);
+
+    // ---- Animation loop: walk physics, day/night cycle, render ----
+    let raf = 0;
+    let lastTime = 0;
+    const start = performance.now();
+    const DAY_CYCLE_MS = 120_000; // slow ambient cycle, not real 24h
+
+    function tick(now: number) {
+      raf = requestAnimationFrame(tick);
+      const dt = Math.min(0.05, (lastTime ? now - lastTime : 16) / 1000);
+      lastTime = now;
+
+      // Day/night: sun angle + intensity + background sweep, unless cyberpunk mode overrides.
+      if (!cyberpunkRef.current) {
+        const phase = ((now - start) % DAY_CYCLE_MS) / DAY_CYCLE_MS; // 0..1
+        const angle = phase * Math.PI * 2;
+        const alt = Math.sin(angle); // -1 (night) .. 1 (noon)
+        sun.intensity = 0.35 + Math.max(0, alt) * 0.9;
+        ambient.intensity = 0.25 + Math.max(0, alt) * 0.35 + 0.1;
+        const dusk = new THREE.Color(0x0a0a14);
+        const noon = new THREE.Color(0x1b2130);
+        const bg = dusk.clone().lerp(noon, Math.max(0, alt) * 0.5 + 0.5);
+        scene.background = bg;
+        sun.position.set(Math.cos(angle) * 20, 12 + alt * 10, Math.sin(angle) * 20);
+      } else {
+        sun.intensity = 0.12;
+        ambient.intensity = 0.08;
+        scene.background = new THREE.Color(0x03040a);
+      }
+
+      for (const [id, r] of rigs) {
+        const info = latestRef.current.statuses[id];
+        const live: AgentLive = info?.live ?? "idle";
+        const working = live === "working";
+
+        // State transition: start/stop working -> walk to/from desk.
+        if (working && !r.wasWorking) {
+          r.target = r.desk.clone().setZ(r.desk.z + 0.9);
+          r.moving = true;
+          r.seated = false;
+        } else if (!working && r.wasWorking) {
+          r.seated = false;
+        }
+        r.wasWorking = working;
+
+        // Idle wander: occasionally head to a landmark and back.
+        if (!working && !r.moving && now > r.nextWanderAt) {
+          const goHome = Math.random() < 0.4;
+          r.target = goHome
+            ? r.desk.clone().setZ(r.desk.z + 0.9)
+            : LANDMARKS[Math.floor(Math.random() * LANDMARKS.length)].clone();
+          r.moving = true;
+          r.seated = false;
+          r.nextWanderAt = now + 4000 + Math.random() * 5000;
         }
 
-        create() {
-          const g = this.make.graphics({ x: 0, y: 0 });
-          g.fillStyle(0xffffff, 1);
-          g.fillCircle(3, 3, 3);
-          g.generateTexture("mote", 6, 6);
-          g.destroy();
-          this.moteTexture = "mote";
-
-          // One continuous building shell — a single dark floor + outer wall
-          // the whole team shares, not N disconnected panels.
-          this.add
-            .rectangle((bx0 + bx1) / 2, (by0 + by1) / 2, bx1 - bx0, by1 - by0, FLOOR_COLOR, 1)
-            .setStrokeStyle(4, WALL_COLOR, 1);
-
-          const grid = this.add.graphics();
-          grid.lineStyle(1, 0xffffff, 0.03);
-          const step = 16;
-          for (let gx = bx0; gx <= bx1; gx += step) grid.lineBetween(gx, by0, gx, by1);
-          for (let gy = by0; gy <= by1; gy += step) grid.lineBetween(bx0, gy, bx1, gy);
-
-          // Room shells: header bar + label, per distinct room (not per
-          // agent — several agents can share one room).
-          for (const room of ROOM_DEFS) {
-            const rx0 = bx0 + room.x;
-            const ry0 = by0 + room.y;
-            const cx = rx0 + room.w / 2;
-            const cy = ry0 + room.h / 2;
-            const tint = ROOM_TINT[room.kind];
-
-            // Colored floor wash + rug, unique per room — this is what
-            // actually makes the plan read as varied/colorful instead of
-            // one flat dark tone throughout.
-            this.add.rectangle(cx, cy + HEADER_H / 2, room.w - 4, room.h - HEADER_H - 4, tint, 0.05);
-            this.add
-              .rectangle(cx, cy + HEADER_H / 2 + 6, room.w - 60, room.h - HEADER_H - 50, tint, 0.09)
-              .setStrokeStyle(1, tint, 0.3);
-
-            this.add.rectangle(cx, ry0 + HEADER_H / 2, room.w - 3, HEADER_H, HEADER_BAR_COLOR, 0.95);
-            this.add.rectangle(cx, ry0 + HEADER_H - 1, room.w - 3, 2, tint, 0.9); // accent stripe under header
-            this.mkText(rx0 + 8, ry0 + HEADER_H / 2, room.label, {
-              fontFamily: "monospace",
-              fontSize: "11px",
-              fontStyle: "bold",
-              color: "#eef1f8",
-            }).setOrigin(0, 0.5);
-
-            // A little colored ceiling light in each far corner.
-            for (const [dx, dy] of [
-              [22, HEADER_H + 20],
-              [room.w - 22, room.h - 20],
-            ]) {
-              const lamp = this.add.image(rx0 + dx, ry0 + dy, "mote").setTint(tint).setAlpha(0.5).setScale(1.4);
-              if (!prefersReducedMotion) {
-                this.tweens.add({
-                  targets: lamp,
-                  alpha: { from: 0.25, to: 0.6 },
-                  duration: 1800 + Math.random() * 1200,
-                  yoyo: true,
-                  repeat: -1,
-                });
-              }
-            }
-
-            this.buildFurniture(room, rx0, ry0, tint);
-          }
-
-          // Doorways: an open gap in the shared wall between linked rooms,
-          // plus a little door-frame icon in the gap.
-          const walls = this.add.graphics();
-          const doors = this.add.graphics();
-          walls.lineStyle(4, WALL_COLOR, 1);
-          doors.fillStyle(DOOR_COLOR, 0.9);
-          for (const [ka, kb] of DOOR_LINKS) {
-            const a = byKey.get(ka)!;
-            const b = byKey.get(kb)!;
-            this.connectRooms(walls, doors, a, b, bx0, by0);
-          }
-
-          // Agents: grouped into their assigned room, laid out on a desk
-          // grid within that room's floor.
-          const byRoom = new Map<string, AgentSpec[]>();
-          for (const spec of AGENTS) {
-            const key = AGENT_ROOM[spec.id];
-            (byRoom.get(key) ?? byRoom.set(key, []).get(key)!).push(spec);
-          }
-          for (const [key, agents] of byRoom) {
-            const room = byKey.get(key)!;
-            const rx0 = bx0 + room.x;
-            const ry0 = by0 + room.y;
-            const floor = {
-              x0: rx0 + FLOOR_PAD,
-              y0: ry0 + HEADER_H + 6,
-              x1: rx0 + room.w - FLOOR_PAD,
-              y1: ry0 + room.h - FLOOR_PAD,
-            };
-            const cols = agents.length <= 2 ? agents.length : agents.length <= 6 ? 3 : 5;
-            const desks = deskGrid(floor, agents.length, cols);
-            agents.forEach((spec, i) => this.buildAgent(spec, floor, desks[i]));
-          }
-        }
-
-        // Draws an open doorway in the wall shared by two adjacent rooms —
-        // works out which edge they share from their fixed coordinates.
-        connectRooms(
-          walls: Phaser.GameObjects.Graphics,
-          doors: Phaser.GameObjects.Graphics,
-          a: RoomDef,
-          b: RoomDef,
-          bx0: number,
-          by0: number,
-        ) {
-          if (Math.abs(a.y + a.h - b.y) < 1) {
-            const x0 = bx0 + Math.max(a.x, b.x);
-            const x1 = bx0 + Math.min(a.x + a.w, b.x + b.w);
-            const midX = (x0 + x1) / 2;
-            const wallY = by0 + a.y + a.h;
-            walls.lineBetween(x0, wallY, midX - DOOR_W / 2, wallY);
-            walls.lineBetween(midX + DOOR_W / 2, wallY, x1, wallY);
-            doors.fillRect(midX - DOOR_W / 2 + 5, wallY - 3, DOOR_W - 10, 6);
-          } else if (Math.abs(b.y + b.h - a.y) < 1) {
-            this.connectRooms(walls, doors, b, a, bx0, by0);
-          } else if (Math.abs(a.x + a.w - b.x) < 1) {
-            const y0 = by0 + Math.max(a.y, b.y);
-            const y1 = by0 + Math.min(a.y + a.h, b.y + b.h);
-            const midY = (y0 + y1) / 2;
-            const wallX = bx0 + a.x + a.w;
-            walls.lineBetween(wallX, y0, wallX, midY - DOOR_W / 2);
-            walls.lineBetween(wallX, midY + DOOR_W / 2, wallX, y1);
-            doors.fillRect(wallX - 3, midY - DOOR_W / 2 + 5, 6, DOOR_W - 10);
-          } else if (Math.abs(b.x + b.w - a.x) < 1) {
-            this.connectRooms(walls, doors, b, a, bx0, by0);
-          }
-        }
-
-        // A small potted plant — cheap, repeatable detail that reads as
-        // "furnished" without needing real sprite assets.
-        plant(x: number, y: number) {
-          this.add.rectangle(x, y + 6, 10, 8, 0x5a4630, 1).setStrokeStyle(1, 0x3a2c1e, 0.8);
-          this.add.circle(x, y - 3, 8, PLANT_COLOR, 0.9);
-          this.add.circle(x - 4, y, 5, PLANT_COLOR, 0.7);
-          this.add.circle(x + 4, y, 5, PLANT_COLOR, 0.7);
-        }
-
-        // Decorative-only furniture per room kind — evocative, not literal
-        // pixel-art reproduction (drawn from primitives, no external assets).
-        buildFurniture(room: RoomDef, rx0: number, ry0: number, tint: number) {
-          const cx = rx0 + room.w / 2;
-          const cy = ry0 + room.h / 2;
-          const f = (x: number, y: number, w: number, h: number, color = FURNITURE_COLOR) =>
-            this.add.rectangle(x, y, w, h, color, 1).setStrokeStyle(1, WALL_COLOR, 0.7);
-          const screen = (x: number, y: number, w: number, h: number) => {
-            f(x, y, w, h, 0x0d111c);
-            this.add.rectangle(x, y, w - 6, h - 6, tint, 0.35);
-          };
-          switch (room.kind) {
-            case "briefing": {
-              screen(cx, ry0 + HEADER_H + 26, 100, 16);
-              for (let row = 0; row < 3; row++)
-                for (let col = 0; col < 5; col++)
-                  f(rx0 + 26 + col * 44, ry0 + HEADER_H + 66 + row * 34, 26, 12);
-              this.plant(rx0 + 20, ry0 + room.h - 26);
-              this.plant(rx0 + room.w - 20, ry0 + room.h - 26);
-              break;
-            }
-            case "meeting": {
-              f(cx, cy + 6, 130, 60); // table
-              this.add.rectangle(cx, cy + 6, 118, 48, tint, 0.15);
-              for (let i = 0; i < 6; i++) {
-                const angle = (i / 6) * Math.PI * 2;
-                f(cx + Math.cos(angle) * 90, cy + 6 + Math.sin(angle) * 50, 14, 10);
-              }
-              screen(cx, ry0 + HEADER_H + 20, 60, 12);
-              this.plant(rx0 + 20, ry0 + room.h - 24);
-              break;
-            }
-            case "arrivals": {
-              f(cx, ry0 + HEADER_H + 24, 76, 22);
-              this.add.rectangle(cx, ry0 + HEADER_H + 24, 64, 12, tint, 0.2);
-              for (let i = 0; i < 3; i++) f(rx0 + 40 + i * 60, ry0 + room.h - 50, 26, 14); // waiting chairs
-              this.plant(rx0 + room.w - 24, ry0 + HEADER_H + 24);
-              this.plant(rx0 + 24, ry0 + room.h - 24);
-              break;
-            }
-            case "lounge": {
-              f(rx0 + 70, cy + 10, 90, 26, 0x3a2e42);
-              f(rx0 + 190, cy - 10, 26, 70, 0x3a2e42);
-              f(cx + 10, cy + 40, 50, 24);
-              this.add.rectangle(cx + 10, cy + 40, 38, 14, tint, 0.2);
-              this.plant(rx0 + 24, ry0 + room.h - 24);
-              this.plant(rx0 + room.w - 24, ry0 + HEADER_H + 20);
-              break;
-            }
-            case "pantry": {
-              f(cx, ry0 + room.h - FLOOR_PAD - 16, 150, 22);
-              this.add.rectangle(cx, ry0 + room.h - FLOOR_PAD - 16, 138, 10, tint, 0.18);
-              f(rx0 + 30, cy - 6, 26, 46); // fridge
-              f(rx0 + room.w - 30, cy - 6, 26, 26); // microwave/counter unit
-              this.plant(rx0 + room.w - 26, ry0 + room.h - 26);
-              break;
-            }
-            case "server": {
-              for (let i = 0; i < 5; i++) {
-                f(rx0 + 40 + i * 44, cy, 22, 96, 0x11151f);
-                this.add.rectangle(rx0 + 40 + i * 44, cy - 30, 14, 6, tint, 0.6);
-                this.add.rectangle(rx0 + 40 + i * 44, cy - 18, 14, 6, tint, 0.35);
-              }
-              break;
-            }
-            case "command": {
-              // A big wall-of-screens — world map + a couple of chart-like
-              // strips — the "mission control" focal point of the office.
-              const wallY = ry0 + HEADER_H + 40;
-              f(cx, wallY, room.w - 40, 66, 0x0d111c);
-              this.add.rectangle(cx, wallY, room.w - 56, 54, tint, 0.16);
-              const mapDots = this.add.graphics();
-              mapDots.fillStyle(tint, 0.55);
-              for (let i = 0; i < 40; i++) {
-                mapDots.fillRect(
-                  cx - (room.w - 70) / 2 + Phaser.Math.Between(0, room.w - 70),
-                  wallY - 20 + Phaser.Math.Between(0, 40),
-                  2,
-                  2,
-                );
-              }
-              this.plant(rx0 + 20, ry0 + room.h - 24);
-              this.plant(rx0 + room.w - 20, ry0 + room.h - 24);
-              break;
-            }
-            case "workspace": {
-              this.plant(rx0 + 16, ry0 + room.h - 20);
-              this.plant(rx0 + room.w - 16, ry0 + HEADER_H + 18);
-              break;
-            }
-          }
-        }
-
-        buildAgent(spec: AgentSpec, floor: RoomHandles["floor"], consolePos: { x: number; y: number }) {
-          const accent = hexToNum(spec.accent);
-
-          const glow = this.add
-            .rectangle(consolePos.x, consolePos.y, 64, 56, accent, 0)
-            .setStrokeStyle(2, accent, 0);
-          const clickZone = this.add
-            .rectangle(consolePos.x, consolePos.y, 66, 58, 0x000000, 0)
-            .setInteractive({ useHandCursor: true });
-          clickZone.on("pointerdown", () => latestRef.current.onOpen(spec.id));
-
-          // Small rug under the desk, tinted to the AGENT's own accent — a
-          // splash of per-person color inside a shared department room.
-          this.add.rectangle(consolePos.x, consolePos.y + 14, 46, 24, accent, 0.08);
-          this.add.rectangle(consolePos.x, consolePos.y + 4, 26, 14, DESK_COLOR, 1).setStrokeStyle(1, WALL_COLOR, 0.7);
-          this.add.rectangle(consolePos.x, consolePos.y - 2, 16, 9, 0x0d111c, 1);
-          this.add.rectangle(consolePos.x, consolePos.y - 2, 12, 5, accent, 0.3);
-          const consoleLights = [-4, 4].map((dx) =>
-            this.add.image(consolePos.x + dx, consolePos.y - 2, "mote").setTint(accent).setAlpha(0.6).setScale(0.55),
-          );
-
-          // Long role names ("Community & Trust/Safety") would otherwise
-          // overflow into the neighboring desk at this cell width — wrap
-          // instead of clipping or bleeding sideways.
-          const nameText = this.mkText(consolePos.x, consolePos.y - 34, spec.name, {
-            fontFamily: "monospace",
-            fontSize: "8px",
-            color: "#eef1f8",
-            align: "center",
-            wordWrap: { width: 78 },
-          }).setOrigin(0.5, 1);
-          const statusText = this.mkText(consolePos.x, consolePos.y - 22, "idle", {
-            fontFamily: "monospace",
-            fontSize: "8px",
-            color: "#9aa5b8",
-          }).setOrigin(0.5, 1);
-
-          const startX = Phaser.Math.Between(floor.x0 + 10, floor.x1 - 10);
-          const startY = Phaser.Math.Between(floor.y0 + 10, floor.y1 - 10);
-          const legL = this.add.rectangle(-3, 10, 3, 7, accent, 0.7);
-          const legR = this.add.rectangle(3, 10, 3, 7, accent, 0.7);
-          const torso = this.add.rectangle(0, 2, 12, 12, accent, 0.9);
-          const head = this.add.circle(0, -8, 5, accent);
-          const charContainer = this.add.container(startX, startY, [legL, legR, torso, head]);
-
-          const bobTween = this.tweens.add({
-            targets: charContainer,
-            y: `+=2`,
-            duration: 700 + Math.random() * 300,
-            yoyo: true,
-            repeat: -1,
-            ease: "Sine.easeInOut",
-          });
-          if (prefersReducedMotion) bobTween.pause();
-
-          const badgeDot = this.add.circle(0, 0, 3.5, 0xffaa00).setVisible(false);
-          const badgeText = this.mkText(0, 0, "", { fontFamily: "monospace", fontSize: "8px", color: "#ffaa00" })
-            .setOrigin(0.5, 1)
-            .setVisible(false);
-
-          const checkbox = this.add
-            .rectangle(consolePos.x - 26, consolePos.y - 22, 9, 9, 0x000000, 0.4)
-            .setStrokeStyle(1, 0x8a8a93, 0.9)
-            .setInteractive({ useHandCursor: true });
-          checkbox.on(
-            "pointerdown",
-            (_p: Phaser.Input.Pointer, _lx: number, _ly: number, event: { stopPropagation: () => void }) => {
-              event.stopPropagation();
-              latestRef.current.onToggleSelect(spec.id);
-            },
-          );
-          const checkMark = this.mkText(consolePos.x - 26, consolePos.y - 22, "✓", {
-            fontFamily: "monospace",
-            fontSize: "9px",
-            color: "#00ff88",
-          })
-            .setOrigin(0.5)
-            .setVisible(false);
-
-          const room: RoomHandles = {
-            clickZone,
-            glow,
-            charContainer,
-            legL,
-            legR,
-            torso,
-            head,
-            nameText,
-            badgeDot,
-            badgeText,
-            checkbox,
-            checkMark,
-            statusText,
-            consoleLights,
-            bobTween,
-            glowTween: null,
-            wiggleTween: null,
-            moveTween: null,
-            wanderEvent: this.time.addEvent({
-              delay: 1600 + Math.random() * 1600,
-              loop: true,
-              callback: () => this.wander(spec.id),
-            }),
-            floor,
-            consolePos,
-            wasWorking: false,
-            seated: false,
-          };
-          roomsRef.current.set(spec.id, room);
-        }
-
-        // Idle behaviour: stroll to a new random spot on the shared room
-        // floor. Skipped entirely while actually working (seated at the
-        // desk instead) — the timer keeps ticking either way so it resumes
-        // wandering immediately once the agent goes idle again.
-        wander(id: AgentId) {
-          const r = roomsRef.current.get(id);
-          // Idle wandering is pure ambiance with no informational value, so
-          // it's the first thing to cut for reduced-motion users — agents
-          // simply stand still until a real state change (start/stop
-          // working) moves them.
-          if (!r || r.wasWorking || prefersReducedMotion) return;
-          const tx = Phaser.Math.Between(r.floor.x0 + 10, r.floor.x1 - 10);
-          const ty = Phaser.Math.Between(r.floor.y0 + 10, r.floor.y1 - 10);
-          this.walkTo(r, tx, ty);
-        }
-
-        setSeated(r: RoomHandles, seated: boolean) {
-          r.seated = seated;
-          r.legL.setVisible(!seated);
-          r.legR.setVisible(!seated);
-          r.torso.y = seated ? 5 : 2;
-          r.head.y = seated ? -5 : -8;
-          if (seated) {
-            r.bobTween.pause();
-            r.charContainer.setAngle(0);
-            r.wiggleTween?.stop();
-            r.wiggleTween = prefersReducedMotion
-              ? null
-              : this.tweens.add({
-                  targets: r.torso,
-                  x: { from: -0.6, to: 0.6 },
-                  duration: 160,
-                  yoyo: true,
-                  repeat: -1,
-                });
+        if (r.moving) {
+          const toTarget = r.target.clone().sub(r.group.position);
+          const dist = toTarget.length();
+          if (dist < 0.12) {
+            r.moving = false;
+            r.group.position.copy(r.target);
+            const atDesk = r.target.distanceTo(r.desk.clone().setZ(r.desk.z + 0.9)) < 0.01;
+            if (atDesk && working) r.seated = true;
           } else {
-            r.wiggleTween?.stop();
-            r.wiggleTween = null;
-            r.torso.x = 0;
-            if (!prefersReducedMotion) r.bobTween.resume();
+            toTarget.normalize();
+            const speed = 2.4;
+            r.group.position.addScaledVector(toTarget, speed * dt);
+            r.group.rotation.y = Math.atan2(toTarget.x, toTarget.z);
+            r.walkT += dt * 9;
+            const swing = Math.sin(r.walkT) * 0.35;
+            r.legL.rotation.x = swing;
+            r.legR.rotation.x = -swing;
           }
+        } else {
+          r.legL.rotation.x = THREE.MathUtils.lerp(r.legL.rotation.x, 0, 0.1);
+          r.legR.rotation.x = THREE.MathUtils.lerp(r.legR.rotation.x, 0, 0.1);
         }
 
-        walkTo(r: RoomHandles, tx: number, ty: number, onArrive?: () => void) {
-          if (r.seated) this.setSeated(r, false);
-          const dx = tx - r.charContainer.x;
-          if (Math.abs(dx) > 1) r.charContainer.setScale(dx < 0 ? -1 : 1, 1);
-          const dist = Phaser.Math.Distance.Between(r.charContainer.x, r.charContainer.y, tx, ty);
-          r.moveTween?.stop();
-          r.wiggleTween?.stop();
-          // bobTween also animates charContainer.y — left running, it fights
-          // moveTween's interpolation of the same property and stutters the
-          // walk. Pause it for the trip; resumed on arrival (unless the
-          // agent is about to sit down, which pauses it again anyway).
-          r.bobTween.pause();
-          r.wiggleTween = prefersReducedMotion
-            ? null
-            : this.tweens.add({
-                targets: r.charContainer,
-                angle: { from: -4, to: 4 },
-                duration: 180,
-                yoyo: true,
-                repeat: -1,
-              });
-          r.moveTween = this.tweens.add({
-            targets: r.charContainer,
-            x: tx,
-            y: ty,
-            duration: Math.max(350, dist * 14),
-            ease: "Cubic.easeInOut",
-            onComplete: () => {
-              r.wiggleTween?.stop();
-              r.wiggleTween = null;
-              r.charContainer.setAngle(0);
-              if (!onArrive && !prefersReducedMotion) r.bobTween.resume();
-              onArrive?.();
-            },
-          });
-        }
+        // Seated pose: crouch the group, hide legs.
+        const seatY = r.seated ? -0.28 : 0;
+        r.group.position.y = THREE.MathUtils.lerp(r.group.position.y, seatY, 0.15);
+        r.legL.visible = !r.seated;
+        r.legR.visible = !r.seated;
 
-        applyStatus(id: AgentId, info: AgentStatusInfo | undefined, isSelected: boolean) {
-          const r = roomsRef.current.get(id);
-          if (!r) return;
-
-          r.checkMark.setVisible(isSelected);
-          r.checkbox.setFillStyle(isSelected ? 0x00ff88 : 0x000000, isSelected ? 0.25 : 0.4);
-
-          const live: AgentLive = info?.live ?? "idle";
-          r.statusText.setText(live === "working" ? "working" : live === "done" ? "ready" : "idle");
-          r.statusText.setColor(live === "working" ? "#ff8a1f" : live === "done" ? "#ffd23f" : "#6b7280");
-
-          const nowWorking = live === "working";
-          if (nowWorking && !r.wasWorking) {
-            this.walkTo(r, r.consolePos.x, r.consolePos.y - 6, () => this.setSeated(r, true));
-          } else if (!nowWorking && r.wasWorking) {
-            r.moveTween?.stop();
-            this.setSeated(r, false);
-          }
-          r.wasWorking = nowWorking;
-
-          const idleColor = hexToNum(AGENTS.find((a) => a.id === id)!.accent);
-          if (nowWorking) {
-            const visual = (info?.tool && TOOL_VISUAL[info.tool]) || DEFAULT_TOOL_VISUAL;
-            r.badgeDot
-              .setPosition(r.charContainer.x, r.charContainer.y - 22)
-              .setVisible(true)
-              .setFillStyle(visual.color);
-            r.badgeText
-              .setPosition(r.charContainer.x, r.charContainer.y - 26)
-              .setVisible(true)
-              .setText(visual.label)
-              .setColor(`#${visual.color.toString(16).padStart(6, "0")}`);
-            r.consoleLights.forEach((l) => l.setTint(visual.color).setAlpha(1));
-            if (!r.glowTween) {
-              r.glowTween = this.tweens.add({
-                targets: r.glow,
-                alpha: { from: 0, to: 0.45 },
-                duration: 550,
-                yoyo: true,
-                repeat: -1,
-              });
-              r.glow.setStrokeStyle(2, visual.color, 0);
-            }
-          } else {
-            r.badgeDot.setVisible(false);
-            r.badgeText.setVisible(false);
-            r.consoleLights.forEach((l) => l.setTint(idleColor).setAlpha(0.5));
-            if (r.glowTween) {
-              r.glowTween.stop();
-              r.glowTween = null;
-              r.glow.setStrokeStyle(2, idleColor, 0);
-            }
-          }
-        }
-
-        update() {
-          for (const r of roomsRef.current.values()) {
-            if (r.badgeDot.visible) {
-              r.badgeDot.setPosition(r.charContainer.x, r.charContainer.y - 22);
-              r.badgeText.setPosition(r.charContainer.x, r.charContainer.y - 26);
-            }
-          }
+        // Monitor + desk light reflect activity.
+        if (working) {
+          const visual = (info?.tool && TOOL_VISUAL[info.tool]) || DEFAULT_TOOL_VISUAL;
+          r.monitorMat.emissive.setHex(visual.color);
+          r.monitorMat.emissiveIntensity = cyberpunkRef.current ? 2.2 : 1.1;
+          r.deskLight.intensity = cyberpunkRef.current ? 1.4 : 0.7;
+          r.deskLight.color.setHex(visual.color);
+        } else {
+          r.monitorMat.emissiveIntensity = cyberpunkRef.current ? 0.5 : 0.15;
+          r.deskLight.intensity = cyberpunkRef.current ? 0.25 : 0;
         }
       }
 
-      const game = new Phaser.Game({
-        type: Phaser.AUTO,
-        parent: hostRef.current,
-        width,
-        height,
-        transparent: true,
-        scene: DeckScene,
-        // pixelArt forces nearest-neighbor canvas scaling — fine for the
-        // solid-color shapes here, but it mangles text glyphs once
-        // Scale.FIT stretches the canvas above 1x (which it does on most
-        // windows). Smooth/antialiased scaling keeps text legible; these
-        // shapes have no fine pixel detail to lose from it.
-        render: { antialias: true, roundPixels: true },
-        // Fixed internal resolution scaled to fill whatever space the host
-        // div has, so it reads as full-screen on any window size.
-        scale: {
-          mode: Phaser.Scale.FIT,
-          autoCenter: Phaser.Scale.CENTER_BOTH,
-          width,
-          height,
-        },
-      });
-      gameRef.current = game;
+      controls.update();
+      renderer.render(scene, camera);
+    }
+    raf = requestAnimationFrame(tick);
 
-      game.events.once("ready", () => {
-        const scene = game.scene.keys[Object.keys(game.scene.keys)[0]] as InstanceType<typeof DeckScene>;
-        for (const spec of AGENTS) {
-          scene.applyStatus(spec.id, latestRef.current.statuses[spec.id], latestRef.current.selected.has(spec.id));
-        }
-      });
-    })();
-
-    const rooms = roomsRef.current;
     return () => {
-      disposed = true;
-      gameRef.current?.destroy(true);
-      gameRef.current = null;
-      rooms.clear();
+      cancelAnimationFrame(raf);
+      resizeObserver.disconnect();
+      renderer.domElement.removeEventListener("click", onClick);
+      controls.dispose();
+      renderer.dispose();
+      if (renderer.domElement.parentElement === host) host.removeChild(renderer.domElement);
+      rigs.clear();
     };
   }, []);
 
-  // Reconcile visuals on every status/selection change without touching the
-  // Phaser.Game instance itself.
-  useEffect(() => {
-    const scene = gameRef.current?.scene.keys[Object.keys(gameRef.current.scene.keys)[0]] as
-      | { applyStatus: (id: AgentId, info: AgentStatusInfo | undefined, sel: boolean) => void }
-      | undefined;
-    if (!scene) return;
-    for (const spec of AGENTS) {
-      scene.applyStatus(spec.id, statuses[spec.id], selected.has(spec.id));
-    }
-  }, [statuses, selected]);
-
-  return <div ref={hostRef} className="w-full h-full flex items-center justify-center [&>canvas]:rounded-lg" />;
+  return (
+    <div className="relative w-full h-full">
+      <div ref={hostRef} className="w-full h-full [&>canvas]:rounded-lg" />
+      <button
+        onClick={() => setCyberpunk((c) => !c)}
+        className="absolute bottom-3 left-3 text-[10px] px-2 py-1 rounded font-display glass"
+        style={{
+          border: "1px solid var(--border)",
+          color: cyberpunk ? "#00ff88" : "var(--text-dim)",
+        }}
+        title="Toggle lights off / cyberpunk mode"
+      >
+        {cyberpunk ? "Lights on" : "Lights off"}
+      </button>
+    </div>
+  );
 }
