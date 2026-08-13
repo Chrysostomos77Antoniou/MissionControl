@@ -95,7 +95,13 @@ export function RoomsDashboard() {
           trigger float on top of it instead of eating fixed side columns,
           so the 3D scene gets the whole screen. */}
       <div className="relative h-full w-full rounded-xl overflow-hidden">
-        <AgentDeck statuses={status} selected={selected} onToggleSelect={toggleSelected} onOpen={setOpen} />
+        <AgentDeck
+          statuses={status}
+          selected={selected}
+          onToggleSelect={toggleSelected}
+          onOpen={setOpen}
+          onOpenOrchestrator={() => setOrchOpen(true)}
+        />
 
         {/* HUD header — badge / title / Orchestrator credit-slot, mirroring
             the reference office's top bar, then a live activity ticker. */}

@@ -10,11 +10,14 @@ import { TOOL_VISUAL, DEFAULT_TOOL_VISUAL } from "../../lib/tool-visual";
 // Matched to the reference screenshot from Gaurav2693/ai-office
 // (github.com/Gaurav2693/ai-office, verified live at
 // skill-deploy-qmm7droauc.vercel.app): a flat-shaded isometric office —
-// orthographic camera, dark-navy void with a light desk floor, exposed
-// ceiling truss + hanging panels, thin glass-wall mullions around the
-// perimeter, a branded reception desk, a bookshelf, potted plants,
-// floating decorative particles, and voxel characters with hair + arms.
-// No external model assets, same as that project's primitives-only approach.
+// orthographic camera, dark-navy void with a light desk floor, a branded
+// reception desk, a bookshelf, potted plants, floating decorative
+// particles, and voxel characters with hair + arms. Every desk carries a
+// billboarded nameplate + accent-colored edge strip so it's clear at a
+// glance whose desk is whose, and the desk/monitor/nameplate are all
+// click targets (not just the character) so it still opens that agent's
+// chat even while they're off wandering. No external model assets, same
+// as that project's primitives-only approach.
 
 type Zone = "command" | "arrivals" | "workspace";
 
@@ -41,10 +44,11 @@ const FRUSTUM = 30; // orthographic frustum height — tuned so the floor + prop
 // center, window, lounge" destination set.
 const LANDMARKS: THREE.Vector3[] = [
   new THREE.Vector3(2, 0, 1), // water cooler
-  new THREE.Vector3(-7, 0, 9), // lounge
+  new THREE.Vector3(-4, 0, -5), // lounge
   new THREE.Vector3(6, 0, -2), // center/window
 ];
 
+const ORCH_DESK = new THREE.Vector3(-7, 0, 9);
 const RECEPTION = new THREE.Vector3(16, 0, 11);
 const SHELF_POS = new THREE.Vector3(-19, 0, -13);
 const PLANT_POS: THREE.Vector3[] = [
@@ -97,6 +101,30 @@ function makeSignTexture(text: string): THREE.CanvasTexture {
   return tex;
 }
 
+// Small billboarded nameplate that floats above a desk so it's readable
+// even when the character wanders off — sprites always face the camera.
+function makeLabelSprite(text: string, color: string): THREE.Sprite {
+  const canvas = document.createElement("canvas");
+  canvas.width = 256;
+  canvas.height = 64;
+  const ctx = canvas.getContext("2d")!;
+  ctx.font = "bold 26px system-ui, sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  const textWidth = ctx.measureText(text).width;
+  const padX = 14;
+  const boxW = Math.min(canvas.width - 8, textWidth + padX * 2);
+  ctx.fillStyle = "rgba(7,7,7,0.78)";
+  ctx.fillRect(canvas.width / 2 - boxW / 2, 14, boxW, 36);
+  ctx.fillStyle = color;
+  ctx.fillText(text, canvas.width / 2, 33);
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: false }));
+  sprite.scale.set(1.7, 1.7 * (canvas.height / canvas.width), 1);
+  return sprite;
+}
+
 function applyFrustum(camera: THREE.OrthographicCamera, aspect: number) {
   camera.left = (-FRUSTUM * aspect) / 2;
   camera.right = (FRUSTUM * aspect) / 2;
@@ -136,15 +164,17 @@ export function AgentDeck({
   statuses,
   selected,
   onOpen,
+  onOpenOrchestrator,
 }: {
   statuses: Record<string, AgentStatusInfo>;
   selected: Set<AgentId>;
   onToggleSelect: (id: AgentId) => void;
   onOpen: (id: AgentId) => void;
+  onOpenOrchestrator: () => void;
 }) {
   const hostRef = useRef<HTMLDivElement>(null);
   const rigsRef = useRef<Map<AgentId, AgentRig>>(new Map());
-  const latestRef = useRef({ statuses, selected, onOpen });
+  const latestRef = useRef({ statuses, selected, onOpen, onOpenOrchestrator });
   const [cyberpunk, setCyberpunk] = useState(false);
   const cyberpunkRef = useRef(cyberpunk);
 
@@ -152,8 +182,8 @@ export function AgentDeck({
   // up once in the mount effect below) always reads current values instead
   // of the ones captured at mount.
   useEffect(() => {
-    latestRef.current = { statuses, selected, onOpen };
-  }, [statuses, selected, onOpen]);
+    latestRef.current = { statuses, selected, onOpen, onOpenOrchestrator };
+  }, [statuses, selected, onOpen, onOpenOrchestrator]);
   useEffect(() => {
     cyberpunkRef.current = cyberpunk;
   }, [cyberpunk]);
@@ -204,48 +234,6 @@ export function AgentDeck({
     const floor = new THREE.Mesh(new THREE.PlaneGeometry(FLOOR_W, FLOOR_D), floorMat);
     floor.rotation.x = -Math.PI / 2;
     scene.add(floor);
-
-    // ---- Ceiling truss: cross-hatched beams + a few hanging panels ----
-    const trussMat = new THREE.MeshStandardMaterial({ color: 0x1a2033, roughness: 0.8 });
-    const trussY = 9;
-    const spanX = FLOOR_W * 0.9;
-    const spanZ = FLOOR_D * 0.9;
-    const beamCountX = 5;
-    const beamCountZ = 4;
-    for (let i = 0; i < beamCountX; i++) {
-      const beam = new THREE.Mesh(new THREE.BoxGeometry(0.25, 0.25, spanZ), trussMat);
-      beam.position.set(-spanX / 2 + (i / (beamCountX - 1)) * spanX, trussY, 0);
-      scene.add(beam);
-    }
-    for (let i = 0; i < beamCountZ; i++) {
-      const beam = new THREE.Mesh(new THREE.BoxGeometry(spanX, 0.25, 0.25), trussMat);
-      beam.position.set(0, trussY, -spanZ / 2 + (i / (beamCountZ - 1)) * spanZ);
-      scene.add(beam);
-    }
-    const panelMat = new THREE.MeshStandardMaterial({ color: 0x0e1420 });
-    ([[-8, -4], [6, 3], [14, -8]] as const).forEach(([x, z]) => {
-      const panel = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.08, 0.9), panelMat);
-      panel.position.set(x, trussY - 0.6, z);
-      scene.add(panel);
-    });
-
-    // ---- Perimeter mullions: thin poles standing in for glass walls ----
-    const mullionMat = new THREE.MeshStandardMaterial({ color: 0x8a93a8, emissive: 0x1c2434, emissiveIntensity: 0.3 });
-    const mullionH = 3.2;
-    function addMullions(x1: number, z1: number, x2: number, z2: number, count: number) {
-      for (let i = 0; i < count; i++) {
-        const t = i / (count - 1);
-        const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, mullionH, 6), mullionMat);
-        pole.position.set(THREE.MathUtils.lerp(x1, x2, t), mullionH / 2, THREE.MathUtils.lerp(z1, z2, t));
-        scene.add(pole);
-      }
-    }
-    const hx = FLOOR_W / 2;
-    const hz = FLOOR_D / 2;
-    addMullions(-hx, -hz, hx, -hz, 9);
-    addMullions(-hx, hz, hx, hz, 9);
-    addMullions(-hx, -hz, -hx, hz, 7);
-    addMullions(hx, -hz, hx, hz, 7);
 
     // ---- Reception desk: branded sign + a freestanding monitor plinth ----
     const deskBody = new THREE.Mesh(new THREE.BoxGeometry(3.4, 1.0, 0.7), new THREE.MeshStandardMaterial({ color: 0x0e1522 }));
@@ -311,16 +299,30 @@ export function AgentDeck({
       floaters.push({ mesh, baseY: mesh.position.y, phase: Math.random() * Math.PI * 2, spin: (Math.random() - 0.5) * 0.6 });
     }
 
-    // ---- Landmarks: water cooler + lounge ----
+    const raycastTargets: THREE.Object3D[] = [];
+
+    // ---- Water cooler landmark ----
     const coolerMat = new THREE.MeshStandardMaterial({ color: 0x2f9e5c, emissive: 0x0f3a20 });
     const cooler = new THREE.Mesh(new THREE.CylinderGeometry(0.4, 0.5, 1.6, 12), coolerMat);
     cooler.position.copy(LANDMARKS[0]).setY(0.8);
     scene.add(cooler);
 
-    const loungeMat = new THREE.MeshStandardMaterial({ color: 0x3a2e42 });
-    const sofa = new THREE.Mesh(new THREE.BoxGeometry(4, 0.9, 1.6), loungeMat);
-    sofa.position.set(LANDMARKS[1].x, 0.45, LANDMARKS[1].z);
-    scene.add(sofa);
+    // ---- Orchestrator's desk — a distinct standalone desk, click opens the Orchestrator chat ----
+    const orchDesk = new THREE.Mesh(new THREE.BoxGeometry(2.2, 0.9, 1.0), new THREE.MeshStandardMaterial({ color: 0x241a33 }));
+    orchDesk.position.set(ORCH_DESK.x, 0.45, ORCH_DESK.z);
+    scene.add(orchDesk);
+    const orchNamebar = new THREE.Mesh(
+      new THREE.BoxGeometry(2.0, 0.06, 0.08),
+      new THREE.MeshStandardMaterial({ color: 0xffae3b, emissive: 0xffae3b, emissiveIntensity: 0.5 }),
+    );
+    orchNamebar.position.set(ORCH_DESK.x, 0.94, ORCH_DESK.z + 0.52);
+    scene.add(orchNamebar);
+    const orchLabel = makeLabelSprite("ORCHESTRATOR", "#ffae3b");
+    orchLabel.position.set(ORCH_DESK.x, 1.75, ORCH_DESK.z);
+    scene.add(orchLabel);
+    (orchDesk.userData as { orchestrator: boolean }).orchestrator = true;
+    (orchLabel.userData as { orchestrator: boolean }).orchestrator = true;
+    raycastTargets.push(orchDesk, orchLabel);
 
     // ---- Desks + agents, grouped by zone ----
     const byZone = new Map<Zone, AgentSpec[]>();
@@ -334,7 +336,6 @@ export function AgentDeck({
       workspace: { cx: 1, cz: 5, cols: 3 },
     };
 
-    const raycastTargets: THREE.Object3D[] = [];
     const rigs = rigsRef.current;
     let hairIdx = 0;
 
@@ -346,6 +347,19 @@ export function AgentDeck({
       const deskMesh = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.7, 0.9), deskMat);
       deskMesh.position.set(pos.x, 0.35, pos.z);
       scene.add(deskMesh);
+
+      // Accent-colored edge strip so a desk reads as "whose" at a glance,
+      // even before the nameplate above it is legible.
+      const nameBar = new THREE.Mesh(
+        new THREE.BoxGeometry(1.5, 0.06, 0.06),
+        new THREE.MeshStandardMaterial({ color: accent, emissive: accent, emissiveIntensity: 0.4 }),
+      );
+      nameBar.position.set(pos.x, 0.71, pos.z + 0.46);
+      scene.add(nameBar);
+
+      const label = makeLabelSprite(spec.name.toUpperCase(), spec.accent);
+      label.position.set(pos.x, 1.9, pos.z);
+      scene.add(label);
 
       const monitorMat = new THREE.MeshStandardMaterial({
         color: 0x0d111c,
@@ -387,9 +401,10 @@ export function AgentDeck({
       group.add(legL, legR, torso, armL, armR, head, hair);
       group.position.set(pos.x, 0, pos.z + 0.9);
       scene.add(group);
-      raycastTargets.push(torso, head);
-      (torso.userData as { agentId: AgentId }).agentId = spec.id;
-      (head.userData as { agentId: AgentId }).agentId = spec.id;
+      raycastTargets.push(torso, head, deskMesh, monitor, label);
+      for (const obj of [torso, head, deskMesh, monitor, label]) {
+        (obj.userData as { agentId: AgentId }).agentId = spec.id;
+      }
 
       rigs.set(spec.id, {
         group, legL, legR, armL, armR, torso, head, monitor, monitorMat, deskLight,
@@ -415,8 +430,9 @@ export function AgentDeck({
       raycaster.setFromCamera(pointer, camera);
       const hits = raycaster.intersectObjects(raycastTargets, false);
       if (hits.length > 0) {
-        const id = hits[0].object.userData.agentId as AgentId | undefined;
-        if (id) latestRef.current.onOpen(id);
+        const data = hits[0].object.userData as { agentId?: AgentId; orchestrator?: boolean };
+        if (data.orchestrator) latestRef.current.onOpenOrchestrator();
+        else if (data.agentId) latestRef.current.onOpen(data.agentId);
       }
     }
     renderer.domElement.addEventListener("click", onClick);
