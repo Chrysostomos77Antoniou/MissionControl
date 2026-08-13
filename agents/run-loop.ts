@@ -23,6 +23,14 @@ export async function runAgentLoop(opts: {
   const { agent, system, userMessage, tools, maxTurns = 8, model = OPUS, effort, dispatch = dispatchTool } = opts;
   const messages: Anthropic.MessageParam[] = [{ role: "user", content: userMessage }];
   const toolOutputs: string[] = [];
+  // Real eval data showed broad-scope agents doing 25-30 genuine tool calls
+  // (real db_read/read_repo_file investigation) and then hitting maxTurns
+  // anyway, discarding all of it for the literal string "Reached max
+  // turns." — which then made the quality grader (which only sees `text`)
+  // wrongly conclude no investigation had happened. Track the last turn's
+  // text throughout so the fallback below always has real content instead
+  // of a placeholder.
+  let lastText = "";
 
   const finalText = (content: Anthropic.ContentBlock[]) =>
     content
@@ -34,8 +42,17 @@ export async function runAgentLoop(opts: {
   // (both 400 if sent) — only request them for models that actually support
   // them.
   const supportsThinkingControls = model !== HAIKU;
+  const saveOnly = tools.filter((t) => t.name === "save_suggestion");
 
   for (let turn = 0; turn < maxTurns; turn++) {
+    // On the true final turn, take away every tool except save_suggestion —
+    // the earlier text nudge (below) alone wasn't reliably stopping agents
+    // from opening new investigation threads right up to the wall, so make
+    // it physically impossible: the model can only close out what it's
+    // already found or explain there's nothing new, not start exploring.
+    const isFinalTurn = turn === maxTurns - 1;
+    const turnTools = isFinalTurn && saveOnly.length ? saveOnly : tools;
+
     let response;
     try {
       response = await anthropic.messages.create({
@@ -48,7 +65,7 @@ export async function runAgentLoop(opts: {
         // Lower thinking effort on routine agents to cut token spend.
         ...(effort && supportsThinkingControls ? { output_config: { effort } } : {}),
         system,
-        tools,
+        tools: turnTools,
         messages,
       });
     } catch (e) {
@@ -61,6 +78,7 @@ export async function runAgentLoop(opts: {
       return { text: friendly, toolOutputs };
     }
     await recordUsage(model, response.usage);
+    lastText = finalText(response.content) || lastText;
 
     if (response.stop_reason === "end_turn") return { text: finalText(response.content), toolOutputs };
 
@@ -88,8 +106,13 @@ export async function runAgentLoop(opts: {
         type: "text",
         text: `You have ${turnsLeft} turns left before this cycle ends automatically. Stop opening new investigation threads and write your final conclusion now — synthesize what you've already found into your best answer, even if incomplete, and save any suggestion immediately rather than waiting.`,
       });
+    } else if (turnsLeft === 1) {
+      nextInput.push({
+        type: "text",
+        text: `This is your absolute final turn — every tool except save_suggestion has been removed. Either call save_suggestion now with your best finding from everything gathered so far, or write your closing conclusion as plain text if there's genuinely nothing new to report.`,
+      });
     }
     messages.push({ role: "user", content: nextInput });
   }
-  return { text: "Reached max turns.", toolOutputs };
+  return { text: lastText || "Reached max turns.", toolOutputs };
 }
