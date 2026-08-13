@@ -7,12 +7,14 @@ import type { AgentId } from "../../lib/types";
 import type { AgentStatusInfo, AgentLive } from "../../lib/agent-status";
 import { TOOL_VISUAL, DEFAULT_TOOL_VISUAL } from "../../lib/tool-visual";
 
-// Modeled on Gaurav2693/ai-office (github.com/Gaurav2693/ai-office, verified
-// live at skill-deploy-qmm7droauc.vercel.app): a 3D voxel-style office —
-// orbital camera, desks with glowing monitors, a glass-walled meeting room,
-// landmark furniture agents wander to, a day/night light cycle, and a
-// "lights off" neon mode. No external model assets, same as that project's
-// own primitives-only approach and this codebase's prior Phaser scene.
+// Matched to the reference screenshot from Gaurav2693/ai-office
+// (github.com/Gaurav2693/ai-office, verified live at
+// skill-deploy-qmm7droauc.vercel.app): a flat-shaded isometric office —
+// orthographic camera, dark-navy void with a light desk floor, exposed
+// ceiling truss + hanging panels, thin glass-wall mullions around the
+// perimeter, a branded reception desk, a bookshelf, potted plants,
+// floating decorative particles, and voxel characters with hair + arms.
+// No external model assets, same as that project's primitives-only approach.
 
 type Zone = "command" | "arrivals" | "workspace";
 
@@ -33,6 +35,7 @@ const AGENT_ZONE: Record<AgentId, Zone> = {
 
 const FLOOR_W = 42;
 const FLOOR_D = 32;
+const FRUSTUM = 30; // orthographic frustum height — tuned so the floor + props fit at default zoom
 
 // Landmarks idle agents wander to — mirrors ai-office's "water cooler,
 // center, window, lounge" destination set.
@@ -41,6 +44,23 @@ const LANDMARKS: THREE.Vector3[] = [
   new THREE.Vector3(-7, 0, 9), // lounge
   new THREE.Vector3(6, 0, -2), // center/window
 ];
+
+const RECEPTION = new THREE.Vector3(16, 0, 11);
+const SHELF_POS = new THREE.Vector3(-19, 0, -13);
+const PLANT_POS: THREE.Vector3[] = [
+  new THREE.Vector3(-20, 0, -14),
+  new THREE.Vector3(-9, 0, 13),
+  new THREE.Vector3(18, 0, -13),
+  new THREE.Vector3(9, 0, 14),
+];
+const STICKY_POS: THREE.Vector3[] = [
+  new THREE.Vector3(2.6, 0.01, 3.4),
+  new THREE.Vector3(-1.4, 0.01, 6.8),
+  new THREE.Vector3(-14.2, 0.01, -7.6),
+  new THREE.Vector3(4.6, 0.01, 7.1),
+];
+const HAIR_COLORS = [0x2b2b2b, 0x4a3222, 0x1a1a1a, 0x6b4423, 0x3a2a1a, 0x262626];
+const FLOAT_COLORS = [0x22d3ee, 0xec4899, 0x38bdf8, 0xf472b6];
 
 function hexToColor(hex: string): THREE.Color {
   return new THREE.Color(hex);
@@ -59,16 +79,43 @@ function deskPositions(count: number, cols: number, cx: number, cz: number, spac
   return out;
 }
 
+function makeSignTexture(text: string): THREE.CanvasTexture {
+  const canvas = document.createElement("canvas");
+  canvas.width = 512;
+  canvas.height = 128;
+  const ctx = canvas.getContext("2d")!;
+  ctx.fillStyle = "#0b1220";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.fillStyle = "#e8edf5";
+  ctx.font = "bold 60px system-ui, sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.letterSpacing = "6px";
+  ctx.fillText(text, canvas.width / 2, canvas.height / 2 + 2);
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
+function applyFrustum(camera: THREE.OrthographicCamera, aspect: number) {
+  camera.left = (-FRUSTUM * aspect) / 2;
+  camera.right = (FRUSTUM * aspect) / 2;
+  camera.top = FRUSTUM / 2;
+  camera.bottom = -FRUSTUM / 2;
+  camera.updateProjectionMatrix();
+}
+
 interface AgentRig {
   group: THREE.Group; // whole character, moved for walking
   legL: THREE.Mesh;
   legR: THREE.Mesh;
+  armL: THREE.Mesh;
+  armR: THREE.Mesh;
   torso: THREE.Mesh;
   head: THREE.Mesh;
   monitor: THREE.Mesh;
   monitorMat: THREE.MeshStandardMaterial;
   deskLight: THREE.PointLight;
-  badge: THREE.Sprite | null;
   desk: THREE.Vector3;
   walkT: number; // walk-cycle phase
   target: THREE.Vector3;
@@ -76,6 +123,13 @@ interface AgentRig {
   seated: boolean;
   wasWorking: boolean;
   nextWanderAt: number;
+}
+
+interface FloatBit {
+  mesh: THREE.Mesh;
+  baseY: number;
+  phase: number;
+  spin: number;
 }
 
 export function AgentDeck({
@@ -109,86 +163,163 @@ export function AgentDeck({
     const host = hostRef.current;
 
     const scene = new THREE.Scene();
-    const camera = new THREE.PerspectiveCamera(45, host.clientWidth / host.clientHeight, 0.1, 200);
-    camera.position.set(0, 24, 26);
+    scene.background = new THREE.Color(0x0a0e1a);
+
+    const aspect = host.clientWidth / host.clientHeight;
+    const camera = new THREE.OrthographicCamera(
+      (-FRUSTUM * aspect) / 2,
+      (FRUSTUM * aspect) / 2,
+      FRUSTUM / 2,
+      -FRUSTUM / 2,
+      0.1,
+      200,
+    );
+    camera.position.set(26, 22, 30);
+    camera.lookAt(0, 0, 0);
 
     const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
     renderer.setSize(host.clientWidth, host.clientHeight);
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.outputColorSpace = THREE.SRGBColorSpace;
-    renderer.shadowMap.enabled = true;
     host.appendChild(renderer.domElement);
 
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.target.set(0, 0, 0);
     controls.enableDamping = true;
     controls.dampingFactor = 0.08;
-    controls.minDistance = 12;
-    controls.maxDistance = 55;
-    controls.maxPolarAngle = Math.PI * 0.48; // never dip below the floor
+    controls.minZoom = 0.5;
+    controls.maxZoom = 2.4;
+    controls.maxPolarAngle = Math.PI * 0.46; // never dip below the floor
     controls.update();
 
-    // ---- Lighting (day/night cycle drives sun + ambient below) ----
-    const ambient = new THREE.AmbientLight(0xffffff, 0.55);
+    // ---- Lighting: flat, soft — no dramatic shadows, matching the reference's flat-shaded look ----
+    const ambient = new THREE.AmbientLight(0xffffff, 0.72);
     scene.add(ambient);
-    const sun = new THREE.DirectionalLight(0xffffff, 1.0);
-    sun.position.set(10, 22, 8);
-    sun.castShadow = true;
-    sun.shadow.mapSize.set(1024, 1024);
+    const sun = new THREE.DirectionalLight(0xffffff, 0.55);
+    sun.position.set(10, 20, 10);
     scene.add(sun);
 
-    // ---- Floor ----
-    const floorMat = new THREE.MeshStandardMaterial({ color: 0x1b2130, roughness: 0.9 });
+    // ---- Floor: single light desk-floor plane against the dark void, no grid ----
+    const floorMat = new THREE.MeshStandardMaterial({ color: 0xd7dbe3, roughness: 0.85 });
     const floor = new THREE.Mesh(new THREE.PlaneGeometry(FLOOR_W, FLOOR_D), floorMat);
     floor.rotation.x = -Math.PI / 2;
-    floor.receiveShadow = true;
     scene.add(floor);
-    const grid = new THREE.GridHelper(Math.max(FLOOR_W, FLOOR_D), 24, 0x3a4560, 0x262c3d);
-    (grid.material as THREE.Material).opacity = 0.35;
-    (grid.material as THREE.Material).transparent = true;
-    scene.add(grid);
 
-    // ---- Meeting room (glass-walled box, back-right) ----
-    const meetingCenter = new THREE.Vector3(11, 0, -9);
-    const glassMat = new THREE.MeshPhysicalMaterial({
-      color: 0x8ecbff,
-      transparent: true,
-      opacity: 0.18,
-      roughness: 0.05,
-      transmission: 0.6,
-      metalness: 0,
+    // ---- Ceiling truss: cross-hatched beams + a few hanging panels ----
+    const trussMat = new THREE.MeshStandardMaterial({ color: 0x1a2033, roughness: 0.8 });
+    const trussY = 9;
+    const spanX = FLOOR_W * 0.9;
+    const spanZ = FLOOR_D * 0.9;
+    const beamCountX = 5;
+    const beamCountZ = 4;
+    for (let i = 0; i < beamCountX; i++) {
+      const beam = new THREE.Mesh(new THREE.BoxGeometry(0.25, 0.25, spanZ), trussMat);
+      beam.position.set(-spanX / 2 + (i / (beamCountX - 1)) * spanX, trussY, 0);
+      scene.add(beam);
+    }
+    for (let i = 0; i < beamCountZ; i++) {
+      const beam = new THREE.Mesh(new THREE.BoxGeometry(spanX, 0.25, 0.25), trussMat);
+      beam.position.set(0, trussY, -spanZ / 2 + (i / (beamCountZ - 1)) * spanZ);
+      scene.add(beam);
+    }
+    const panelMat = new THREE.MeshStandardMaterial({ color: 0x0e1420 });
+    ([[-8, -4], [6, 3], [14, -8]] as const).forEach(([x, z]) => {
+      const panel = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.08, 0.9), panelMat);
+      panel.position.set(x, trussY - 0.6, z);
+      scene.add(panel);
     });
-    const meetingWallGeo = new THREE.BoxGeometry(9, 3, 0.15);
-    const wallN = new THREE.Mesh(meetingWallGeo, glassMat);
-    wallN.position.set(meetingCenter.x, 1.5, meetingCenter.z - 4);
-    scene.add(wallN);
-    const wallS = wallN.clone();
-    wallS.position.set(meetingCenter.x, 1.5, meetingCenter.z + 4);
-    scene.add(wallS);
-    const sideGeo = new THREE.BoxGeometry(0.15, 3, 8);
-    const wallW = new THREE.Mesh(sideGeo, glassMat);
-    wallW.position.set(meetingCenter.x - 4.5, 1.5, meetingCenter.z);
-    scene.add(wallW);
-    const wallE = wallW.clone();
-    wallE.position.set(meetingCenter.x + 4.5, 1.5, meetingCenter.z);
-    scene.add(wallE);
-    const tableMat = new THREE.MeshStandardMaterial({ color: 0x2a3346 });
-    const table = new THREE.Mesh(new THREE.CylinderGeometry(2.4, 2.4, 0.5, 24), tableMat);
-    table.position.set(meetingCenter.x, 0.5, meetingCenter.z);
-    table.castShadow = true;
-    scene.add(table);
+
+    // ---- Perimeter mullions: thin poles standing in for glass walls ----
+    const mullionMat = new THREE.MeshStandardMaterial({ color: 0x8a93a8, emissive: 0x1c2434, emissiveIntensity: 0.3 });
+    const mullionH = 3.2;
+    function addMullions(x1: number, z1: number, x2: number, z2: number, count: number) {
+      for (let i = 0; i < count; i++) {
+        const t = i / (count - 1);
+        const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, mullionH, 6), mullionMat);
+        pole.position.set(THREE.MathUtils.lerp(x1, x2, t), mullionH / 2, THREE.MathUtils.lerp(z1, z2, t));
+        scene.add(pole);
+      }
+    }
+    const hx = FLOOR_W / 2;
+    const hz = FLOOR_D / 2;
+    addMullions(-hx, -hz, hx, -hz, 9);
+    addMullions(-hx, hz, hx, hz, 9);
+    addMullions(-hx, -hz, -hx, hz, 7);
+    addMullions(hx, -hz, hx, hz, 7);
+
+    // ---- Reception desk: branded sign + a freestanding monitor plinth ----
+    const deskBody = new THREE.Mesh(new THREE.BoxGeometry(3.4, 1.0, 0.7), new THREE.MeshStandardMaterial({ color: 0x0e1522 }));
+    deskBody.position.set(RECEPTION.x, 0.5, RECEPTION.z);
+    scene.add(deskBody);
+    const sign = new THREE.Mesh(new THREE.PlaneGeometry(2.6, 0.65), new THREE.MeshBasicMaterial({ map: makeSignTexture("FOOTRANK"), transparent: true }));
+    sign.position.set(RECEPTION.x, 0.62, RECEPTION.z + 0.36);
+    scene.add(sign);
+    const standBase = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.9, 0.5), new THREE.MeshStandardMaterial({ color: 0x1c2433 }));
+    standBase.position.set(RECEPTION.x + 2.5, 0.45, RECEPTION.z - 0.3);
+    scene.add(standBase);
+    const standScreen = new THREE.Mesh(
+      new THREE.BoxGeometry(0.9, 0.6, 0.06),
+      new THREE.MeshStandardMaterial({ color: 0x0a0e16, emissive: 0x1fb6ff, emissiveIntensity: 0.5 }),
+    );
+    standScreen.position.set(RECEPTION.x + 2.5, 1.05, RECEPTION.z - 0.3);
+    scene.add(standScreen);
+
+    // ---- Bookshelf: frame + a rainbow row of book blocks ----
+    const shelfFrame = new THREE.Mesh(new THREE.BoxGeometry(1.7, 1.4, 0.4), new THREE.MeshStandardMaterial({ color: 0xd8dde6 }));
+    shelfFrame.position.set(SHELF_POS.x, 0.7, SHELF_POS.z);
+    scene.add(shelfFrame);
+    const bookColors = [0xef4444, 0xf97316, 0xeab308, 0x22c55e, 0x3b82f6, 0xa855f7, 0xec4899];
+    bookColors.forEach((c, i) => {
+      const book = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.5, 0.32), new THREE.MeshStandardMaterial({ color: c }));
+      book.position.set(SHELF_POS.x - 0.5 + i * 0.16, 1.06, SHELF_POS.z);
+      scene.add(book);
+    });
+
+    // ---- Potted plants ----
+    PLANT_POS.forEach((p) => {
+      const pot = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.28, 0.35, 10), new THREE.MeshStandardMaterial({ color: 0x334155 }));
+      pot.position.set(p.x, 0.18, p.z);
+      scene.add(pot);
+      const foliage = new THREE.Mesh(new THREE.IcosahedronGeometry(0.42, 0), new THREE.MeshStandardMaterial({ color: 0x2f9e5c }));
+      foliage.position.set(p.x, 0.68, p.z);
+      scene.add(foliage);
+    });
+
+    // ---- Sticky notes: small flat cards resting on the floor ----
+    STICKY_POS.forEach((p, i) => {
+      const note = new THREE.Mesh(
+        new THREE.PlaneGeometry(0.28, 0.28),
+        new THREE.MeshBasicMaterial({ color: i % 2 === 0 ? 0xf472b6 : 0xfacc15, side: THREE.DoubleSide }),
+      );
+      note.rotation.x = -Math.PI / 2;
+      note.rotation.z = Math.random() * 0.6 - 0.3;
+      note.position.set(p.x, p.y, p.z);
+      scene.add(note);
+    });
+
+    // ---- Floating decorative particles ----
+    const floaters: FloatBit[] = [];
+    for (let i = 0; i < 14; i++) {
+      const size = 0.18 + Math.random() * 0.22;
+      const mesh = new THREE.Mesh(
+        new THREE.PlaneGeometry(size, size),
+        new THREE.MeshBasicMaterial({ color: FLOAT_COLORS[i % FLOAT_COLORS.length], transparent: true, opacity: 0.55, side: THREE.DoubleSide }),
+      );
+      mesh.position.set((Math.random() - 0.5) * FLOOR_W * 0.8, 2 + Math.random() * 7, (Math.random() - 0.5) * FLOOR_D * 0.8);
+      mesh.rotation.set(Math.random() * Math.PI, Math.random() * Math.PI, Math.random() * Math.PI);
+      scene.add(mesh);
+      floaters.push({ mesh, baseY: mesh.position.y, phase: Math.random() * Math.PI * 2, spin: (Math.random() - 0.5) * 0.6 });
+    }
 
     // ---- Landmarks: water cooler + lounge ----
     const coolerMat = new THREE.MeshStandardMaterial({ color: 0x2f9e5c, emissive: 0x0f3a20 });
     const cooler = new THREE.Mesh(new THREE.CylinderGeometry(0.4, 0.5, 1.6, 12), coolerMat);
     cooler.position.copy(LANDMARKS[0]).setY(0.8);
-    cooler.castShadow = true;
     scene.add(cooler);
 
     const loungeMat = new THREE.MeshStandardMaterial({ color: 0x3a2e42 });
     const sofa = new THREE.Mesh(new THREE.BoxGeometry(4, 0.9, 1.6), loungeMat);
     sofa.position.set(LANDMARKS[1].x, 0.45, LANDMARKS[1].z);
-    sofa.castShadow = true;
     scene.add(sofa);
 
     // ---- Desks + agents, grouped by zone ----
@@ -205,16 +336,15 @@ export function AgentDeck({
 
     const raycastTargets: THREE.Object3D[] = [];
     const rigs = rigsRef.current;
+    let hairIdx = 0;
 
     function buildAgent(spec: AgentSpec, pos: { x: number; z: number }) {
       const accent = hexToColor(spec.accent);
       const desk = new THREE.Vector3(pos.x, 0, pos.z);
 
-      const deskMat = new THREE.MeshStandardMaterial({ color: 0x2a3346 });
+      const deskMat = new THREE.MeshStandardMaterial({ color: 0xf2f4f8 });
       const deskMesh = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.7, 0.9), deskMat);
       deskMesh.position.set(pos.x, 0.35, pos.z);
-      deskMesh.castShadow = true;
-      deskMesh.receiveShadow = true;
       scene.add(deskMesh);
 
       const monitorMat = new THREE.MeshStandardMaterial({
@@ -230,25 +360,31 @@ export function AgentDeck({
       deskLight.position.set(pos.x, 1.2, pos.z - 0.3);
       scene.add(deskLight);
 
-      // Simple voxel humanoid — torso + head + two legs (legs animate the walk).
+      // Voxel humanoid — hair + torso + arms + head + two legs (legs/arms animate the walk).
       const group = new THREE.Group();
       const legMat = new THREE.MeshStandardMaterial({ color: accent, opacity: 0.85, transparent: true });
       const legGeo = new THREE.BoxGeometry(0.18, 0.55, 0.18);
       const legL = new THREE.Mesh(legGeo, legMat);
       legL.position.set(-0.13, 0.275, 0);
-      legL.castShadow = true;
       const legR = new THREE.Mesh(legGeo, legMat);
       legR.position.set(0.13, 0.275, 0);
-      legR.castShadow = true;
       const torsoMat = new THREE.MeshStandardMaterial({ color: accent });
       const torso = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.6, 0.3), torsoMat);
       torso.position.set(0, 0.85, 0);
-      torso.castShadow = true;
+      const armMat = new THREE.MeshStandardMaterial({ color: accent, opacity: 0.9, transparent: true });
+      const armGeo = new THREE.BoxGeometry(0.13, 0.5, 0.13);
+      const armL = new THREE.Mesh(armGeo, armMat);
+      armL.position.set(-0.32, 0.82, 0);
+      const armR = new THREE.Mesh(armGeo, armMat);
+      armR.position.set(0.32, 0.82, 0);
       const headMat = new THREE.MeshStandardMaterial({ color: 0xf0d9b5 });
       const head = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.32, 0.32), headMat);
       head.position.set(0, 1.32, 0);
-      head.castShadow = true;
-      group.add(legL, legR, torso, head);
+      const hairMat = new THREE.MeshStandardMaterial({ color: HAIR_COLORS[hairIdx % HAIR_COLORS.length] });
+      hairIdx++;
+      const hair = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.12, 0.34), hairMat);
+      hair.position.set(0, 1.5, -0.02);
+      group.add(legL, legR, torso, armL, armR, head, hair);
       group.position.set(pos.x, 0, pos.z + 0.9);
       scene.add(group);
       raycastTargets.push(torso, head);
@@ -256,21 +392,9 @@ export function AgentDeck({
       (head.userData as { agentId: AgentId }).agentId = spec.id;
 
       rigs.set(spec.id, {
-        group,
-        legL,
-        legR,
-        torso,
-        head,
-        monitor,
-        monitorMat,
-        deskLight,
-        badge: null,
-        desk,
-        walkT: 0,
-        target: group.position.clone(),
-        moving: false,
-        seated: false,
-        wasWorking: false,
+        group, legL, legR, armL, armR, torso, head, monitor, monitorMat, deskLight,
+        desk, walkT: 0, target: group.position.clone(),
+        moving: false, seated: false, wasWorking: false,
         nextWanderAt: performance.now() + 1500 + Math.random() * 3000,
       });
     }
@@ -300,40 +424,37 @@ export function AgentDeck({
     // ---- Resize ----
     function onResize() {
       if (!host) return;
-      camera.aspect = host.clientWidth / host.clientHeight;
-      camera.updateProjectionMatrix();
+      applyFrustum(camera, host.clientWidth / host.clientHeight);
       renderer.setSize(host.clientWidth, host.clientHeight);
     }
     const resizeObserver = new ResizeObserver(onResize);
     resizeObserver.observe(host);
 
-    // ---- Animation loop: walk physics, day/night cycle, render ----
+    // ---- Animation loop: walk physics, particle drift, render ----
     let raf = 0;
     let lastTime = 0;
-    const start = performance.now();
-    const DAY_CYCLE_MS = 120_000; // slow ambient cycle, not real 24h
+    const startTime = performance.now();
 
     function tick(now: number) {
       raf = requestAnimationFrame(tick);
       const dt = Math.min(0.05, (lastTime ? now - lastTime : 16) / 1000);
       lastTime = now;
 
-      // Day/night: sun angle + intensity + background sweep, unless cyberpunk mode overrides.
       if (!cyberpunkRef.current) {
-        const phase = ((now - start) % DAY_CYCLE_MS) / DAY_CYCLE_MS; // 0..1
-        const angle = phase * Math.PI * 2;
-        const alt = Math.sin(angle); // -1 (night) .. 1 (noon)
-        sun.intensity = 0.35 + Math.max(0, alt) * 0.9;
-        ambient.intensity = 0.25 + Math.max(0, alt) * 0.35 + 0.1;
-        const dusk = new THREE.Color(0x0a0a14);
-        const noon = new THREE.Color(0x1b2130);
-        const bg = dusk.clone().lerp(noon, Math.max(0, alt) * 0.5 + 0.5);
-        scene.background = bg;
-        sun.position.set(Math.cos(angle) * 20, 12 + alt * 10, Math.sin(angle) * 20);
+        ambient.intensity = 0.72;
+        sun.intensity = 0.55;
+        scene.background = new THREE.Color(0x0a0e1a);
       } else {
-        sun.intensity = 0.12;
-        ambient.intensity = 0.08;
-        scene.background = new THREE.Color(0x03040a);
+        ambient.intensity = 0.14;
+        sun.intensity = 0.08;
+        scene.background = new THREE.Color(0x03050d);
+      }
+
+      const elapsed = (now - startTime) / 1000;
+      for (const f of floaters) {
+        f.mesh.position.y = f.baseY + Math.sin(elapsed + f.phase) * 0.6;
+        f.mesh.rotation.x += f.spin * dt;
+        f.mesh.rotation.y += f.spin * dt * 0.7;
       }
 
       for (const [id, r] of rigs) {
@@ -379,10 +500,14 @@ export function AgentDeck({
             const swing = Math.sin(r.walkT) * 0.35;
             r.legL.rotation.x = swing;
             r.legR.rotation.x = -swing;
+            r.armL.rotation.x = -swing * 0.7;
+            r.armR.rotation.x = swing * 0.7;
           }
         } else {
           r.legL.rotation.x = THREE.MathUtils.lerp(r.legL.rotation.x, 0, 0.1);
           r.legR.rotation.x = THREE.MathUtils.lerp(r.legR.rotation.x, 0, 0.1);
+          r.armL.rotation.x = THREE.MathUtils.lerp(r.armL.rotation.x, 0, 0.1);
+          r.armR.rotation.x = THREE.MathUtils.lerp(r.armR.rotation.x, 0, 0.1);
         }
 
         // Seated pose: crouch the group, hide legs.

@@ -9,6 +9,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, Di
 import { apiGet, apiPost } from "../../lib/api";
 import type { AgentStatusInfo, AgentLive } from "../../lib/agent-status";
 import type { AgentId } from "../../lib/types";
+import { TOOL_VISUAL, DEFAULT_TOOL_VISUAL } from "../../lib/tool-visual";
 
 const DOT: Record<AgentLive, string> = { working: "#ff8a1f", done: "#ffd23f", idle: "#4a443a" };
 const LABEL: Record<AgentLive, string> = { working: "Working", done: "Ready", idle: "Idle" };
@@ -81,6 +82,13 @@ export function RoomsDashboard() {
 
   const openSpec = open ? AGENTS.find((a) => a.id === open) ?? null : null;
 
+  const workingCount = AGENTS.reduce((n, a) => n + (status[a.id]?.live === "working" ? 1 : 0), 0);
+  const tickerItems = AGENTS.filter((a) => status[a.id]?.live === "working").map((a) => {
+    const info = status[a.id];
+    const visual = (info?.tool && TOOL_VISUAL[info.tool]) || DEFAULT_TOOL_VISUAL;
+    return { id: a.id, name: a.name, accent: a.accent, label: visual.label.toUpperCase() };
+  });
+
   return (
     <>
       {/* The office is now the full stage — roster and the Orchestrator
@@ -89,9 +97,72 @@ export function RoomsDashboard() {
       <div className="relative h-full w-full rounded-xl overflow-hidden">
         <AgentDeck statuses={status} selected={selected} onToggleSelect={toggleSelected} onOpen={setOpen} />
 
-        {/* Roster — floating top-left. Click a row to open a private
-            channel; click its checkbox to select it for a manual Run. */}
-        <aside className="absolute top-3 left-3 w-[190px] max-h-[calc(100%-1.5rem)] glass rounded-xl p-3 flex flex-col overflow-y-auto">
+        {/* HUD header — badge / title / Orchestrator credit-slot, mirroring
+            the reference office's top bar, then a live activity ticker. */}
+        <div className="absolute top-0 left-0 right-0 pt-3 px-4 flex items-start justify-between pointer-events-none z-10">
+          <div
+            className="pointer-events-auto inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 glass"
+            style={{ borderColor: workingCount > 0 ? "rgba(255,174,59,0.4)" : "var(--border)" }}
+          >
+            <span
+              className="w-1.5 h-1.5 rounded-full"
+              style={{
+                background: workingCount > 0 ? "var(--amber)" : "var(--text-dim)",
+                animation: workingCount > 0 ? "pulse 1.3s linear infinite" : "none",
+              }}
+            />
+            <span
+              className="text-[9px] font-display tracking-wider"
+              style={{ color: workingCount > 0 ? "var(--amber)" : "var(--text-dim)" }}
+            >
+              {workingCount > 0 ? `${workingCount} AGENT${workingCount > 1 ? "S" : ""} WORKING` : "ALL IDLE"}
+            </span>
+          </div>
+
+          <div className="text-center pointer-events-none select-none">
+            <div className="font-display text-lg tracking-[0.15em]" style={{ color: "var(--text)" }}>
+              MISSION <span style={{ color: "var(--amber)" }}>CONTROL</span>
+            </div>
+            <div className="text-[9px] tracking-[0.35em] mt-0.5" style={{ color: "var(--text-dim)" }}>
+              WHERE YOUR AGENTS WORK
+            </div>
+          </div>
+
+          <button onClick={() => setOrchOpen(true)} className="pointer-events-auto flex items-center gap-2 group">
+            <div className="leading-tight text-right">
+              <div className="text-[8px] tracking-widest" style={{ color: "var(--text-dim)" }}>
+                ORCHESTRATOR
+              </div>
+              <div className="text-[10px] font-display transition group-hover:brightness-125" style={{ color: "var(--amber)" }}>
+                Tap to chat →
+              </div>
+            </div>
+            <Monogram name="Orchestrator Core" accent="var(--amber)" size={26} />
+          </button>
+        </div>
+
+        <div
+          className="absolute top-14 left-4 right-4 rounded-md pointer-events-auto overflow-x-auto z-10"
+          style={{ background: "rgba(7,7,7,0.55)", border: "1px solid var(--border)" }}
+        >
+          <div className="flex gap-6 px-3 py-1.5 whitespace-nowrap text-[9px] tracking-wider font-display">
+            {tickerItems.length === 0 ? (
+              <span style={{ color: "var(--text-dim)" }}>● ALL SYSTEMS IDLE</span>
+            ) : (
+              tickerItems.map((t) => (
+                <span key={t.id} className="inline-flex items-center gap-1.5" style={{ color: "var(--text-dim)" }}>
+                  <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: t.accent }} />
+                  <span style={{ color: t.accent }}>{t.name.toUpperCase()}</span> {t.label}
+                </span>
+              ))
+            )}
+          </div>
+        </div>
+
+        {/* Roster — floating top-left, below the header. Click a row to
+            open a private channel; click its checkbox to select it for a
+            manual Run. */}
+        <aside className="absolute top-24 left-3 bottom-14 w-[190px] glass rounded-xl p-3 flex flex-col overflow-y-auto">
           <div className="flex items-center justify-between mb-2.5 px-1">
             <div className="font-display text-[11px] uppercase tracking-wider" style={{ color: "var(--text-dim)" }}>
               Agents · {AGENTS.length}
@@ -163,23 +234,18 @@ export function RoomsDashboard() {
           </div>
         </aside>
 
-        {/* Orchestrator trigger — floating top-right. Opens the same chat
-            that used to live in a permanent right-hand column. */}
-        <button
-          onClick={() => setOrchOpen(true)}
-          className="absolute top-3 right-3 glass rounded-xl px-3 py-2 flex items-center gap-2 transition hover:brightness-125"
-          style={{ borderColor: "rgba(255,174,59,0.28)" }}
+        {/* Legend — floating bottom bar, dot + name for every agent, mirroring the reference office's footer key. */}
+        <div
+          className="absolute bottom-0 left-0 right-0 px-4 py-2 flex items-center justify-center gap-x-5 gap-y-1 flex-wrap pointer-events-none z-10"
+          style={{ background: "linear-gradient(0deg, rgba(7,7,7,0.75), transparent)" }}
         >
-          <Monogram name="Orchestrator Core" accent="var(--amber)" size={26} />
-          <div className="leading-tight text-left">
-            <div className="font-display text-[11px]" style={{ color: "var(--text)" }}>
-              Orchestrator
-            </div>
-            <div className="text-[9px]" style={{ color: "var(--text-dim)" }}>
-              Tap to chat
-            </div>
-          </div>
-        </button>
+          {AGENTS.map((a) => (
+            <span key={a.id} className="text-[9px] tracking-wider font-display flex items-center gap-1.5" style={{ color: "var(--text-dim)" }}>
+              <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: a.accent }} />
+              {a.id.toUpperCase()}
+            </span>
+          ))}
+        </div>
       </div>
 
       {/* Orchestrator chat — Dialog, same pattern as the per-agent chat below. */}
