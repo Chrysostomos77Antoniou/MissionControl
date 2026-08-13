@@ -2,8 +2,9 @@
 import { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
-import { AGENTS, type AgentSpec } from "../../agents/registry";
+import type { AgentSpec } from "../../agents/registry";
 import type { AgentId } from "../../lib/types";
+import { DEPARTMENT_META, departmentAgents, type DepartmentId } from "../../lib/office-layout";
 import type { AgentStatusInfo, AgentLive } from "../../lib/agent-status";
 import { TOOL_VISUAL, DEFAULT_TOOL_VISUAL } from "../../lib/tool-visual";
 
@@ -25,37 +26,24 @@ import { TOOL_VISUAL, DEFAULT_TOOL_VISUAL } from "../../lib/tool-visual";
 // status, and meetings use a lightweight randomized scheduler, since there
 // is no real "time of day" concept in this app.
 
-type Zone = "command" | "arrivals" | "workspace";
-
-const AGENT_ZONE: Record<AgentId, Zone> = {
-  cybersecurity: "command",
-  devops: "command",
-  community: "arrivals",
-  engineering: "workspace",
-  developer: "workspace",
-  qa: "workspace",
-  uxdesign: "workspace",
-  marketing: "workspace",
-  growth: "workspace",
-  competitive: "workspace",
-  copywriter: "workspace",
-  legal: "workspace",
-};
-
-// Floor is 34x26 — the reference's 26x20 scaled ~1.3x to fit 12 desks
-// instead of 8, same ~1.3:1 aspect ratio.
-const FLOOR_W = 34;
-const FLOOR_D = 26;
+// Floor grows to fit three real department rooms (see lib/office-layout.ts)
+// plus the shared common area, conference room, and the Orchestrator's
+// office, none of which overlap — coordinates hand-derived in the
+// 2026-08-13 department-offices plan.
+const FLOOR_W = 48;
+const FLOOR_D = 34;
 const SKIN = 0xdeb887;
 
 const LANDMARKS: THREE.Vector3[] = [
   new THREE.Vector3(4, 0, 8), // water cooler
   new THREE.Vector3(4, 0, -8), // lounge (couch below)
-  new THREE.Vector3(-13, 0, 2), // center/window
+  new THREE.Vector3(-3, 0, 0), // center/window — walkway between departments and the east side
 ];
 
 const ORCH_DESK = new THREE.Vector3(-9, 0, 10);
-const RECEPTION = new THREE.Vector3(10.5, 0, 8.5);
+// Nudged 2 units west of its old x=10.5 so the enlarged Orchestrator's
+// office (Task 4, x: 10.5..21.5) has clearance from it.
+const RECEPTION = new THREE.Vector3(8.5, 0, 8.5);
 const MEETING_CENTER = new THREE.Vector3(10.5, 0, -4);
 const MEETING_ROOM_W = 7.5;
 const MEETING_ROOM_D = 7.2;
@@ -409,6 +397,38 @@ export function AgentDeck({
     // still read as unwanted stuff floating overhead from these camera
     // angles, so the office is open to the dark void above.
 
+    // ---- Department rooms: same fully-enclosed glass-box pattern as the
+    // conference room below (4 full walls, no doorway gap — agents have
+    // no collision detection anywhere in this file, so they already walk
+    // straight through the conference room's glass today; department
+    // rooms follow the same precedent rather than inventing new
+    // wall-collision/doorway logic). ----
+    function buildDepartmentRoom(meta: (typeof DEPARTMENT_META)[DepartmentId]) {
+      const hw = meta.size.w / 2;
+      const hd = meta.size.d / 2;
+      ([
+        [meta.size.w, 0.06, meta.center.x, meta.center.z - hd],
+        [meta.size.w, 0.06, meta.center.x, meta.center.z + hd],
+      ] as const).forEach(([w, d, x, z]) => {
+        const wall = new THREE.Mesh(new THREE.BoxGeometry(w, 3.5, d), glass);
+        wall.position.set(x, 1.75, z);
+        scene.add(wall);
+      });
+      ([
+        [0.06, meta.size.d, meta.center.x - hw, meta.center.z],
+        [0.06, meta.size.d, meta.center.x + hw, meta.center.z],
+      ] as const).forEach(([w, d, x, z]) => {
+        const wall = new THREE.Mesh(new THREE.BoxGeometry(w, 3.5, d), glass);
+        wall.position.set(x, 1.75, z);
+        scene.add(wall);
+      });
+      const label = makeLabelSprite(meta.name, "#38bdf8");
+      label.position.set(meta.center.x, 4.3, meta.center.z);
+      scene.add(label);
+    }
+
+    (Object.keys(DEPARTMENT_META) as DepartmentId[]).forEach((id) => buildDepartmentRoom(DEPARTMENT_META[id]));
+
     // ---- Conference room: glass partitions, table, 6 chairs ----
     const raycastTargets: THREE.Object3D[] = [];
     ([
@@ -525,18 +545,7 @@ export function AgentDeck({
     (orchLabel.userData as { orchestrator: boolean }).orchestrator = true;
     raycastTargets.push(orchDesk, orchLabel);
 
-    // ---- Desks + agents, grouped by zone ----
-    const byZone = new Map<Zone, AgentSpec[]>();
-    for (const spec of AGENTS) {
-      const z = AGENT_ZONE[spec.id];
-      (byZone.get(z) ?? byZone.set(z, []).get(z)!).push(spec);
-    }
-    const zoneCenters: Record<Zone, { cx: number; cz: number; cols: number; spacing: number }> = {
-      command: { cx: -9, cz: -6, cols: 2, spacing: 2.8 },
-      arrivals: { cx: -9, cz: 6.5, cols: 1, spacing: 2.8 },
-      workspace: { cx: -4, cz: 2, cols: 3, spacing: 2.6 },
-    };
-
+    // ---- Desks + agents, grouped by department ----
     const rigs = rigsRef.current;
     let hairIdx = 0;
 
@@ -628,11 +637,12 @@ export function AgentDeck({
       });
     }
 
-    for (const [zone, specs] of byZone) {
-      const { cx, cz, cols, spacing } = zoneCenters[zone];
-      const positions = deskPositions(specs.length, cols, cx, cz, spacing);
+    (Object.keys(DEPARTMENT_META) as DepartmentId[]).forEach((id) => {
+      const meta = DEPARTMENT_META[id];
+      const specs = departmentAgents(id);
+      const positions = deskPositions(specs.length, meta.cols, meta.center.x, meta.center.z, meta.spacing);
       specs.forEach((spec, i) => buildAgent(spec, positions[i]));
-    }
+    });
 
     // ---- Click-to-open-chat via raycasting ----
     const raycaster = new THREE.Raycaster();
