@@ -400,15 +400,12 @@ export function AgentDeck({
       scene.add(f);
     });
 
-    // ---- Ceiling slab + 5x3 light-panel grid — this grid, seen from
-    // steep angles, is what read as "black lines" before; there's no
-    // truss, just a semi-transparent ceiling plus small flat panels. ----
-    const ceil = new THREE.Mesh(
-      new THREE.BoxGeometry(FLOOR_W, 0.1, FLOOR_D),
-      new THREE.MeshLambertMaterial({ color: 0x0a1628, transparent: true, opacity: 0.45 }),
-    );
-    ceil.position.y = 4.05;
-    scene.add(ceil);
+    // ---- 5x3 ceiling light-panel grid — this grid, seen from steep
+    // angles, is what read as "black lines" before; there's no truss.
+    // (The reference also has a solid semi-transparent ceiling slab above
+    // this grid, but at our camera angles it washed the whole scene out
+    // in a flat gray sheet, so it's dropped — the light panels alone
+    // already read as a ceiling.) ----
     for (let i = -2; i <= 2; i++) {
       for (let j = -1; j <= 1; j++) {
         const p = new THREE.Mesh(new THREE.BoxGeometry(3.9, 0.03, 1.3), Basic(0xf0f4ff));
@@ -501,7 +498,7 @@ export function AgentDeck({
     }
 
     // ---- Reception desk: branded sign + glow strip ----
-    const rcDesk = new THREE.Mesh(new THREE.BoxGeometry(2.5, 0.9, 0.6), Lam(0x1a2a3a));
+    const rcDesk = new THREE.Mesh(new THREE.BoxGeometry(2.5, 0.9, 0.6), Lam(0x15803d));
     rcDesk.position.set(RECEPTION.x, 0.45, RECEPTION.z);
     rcDesk.castShadow = true;
     scene.add(rcDesk);
