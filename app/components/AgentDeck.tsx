@@ -59,9 +59,14 @@ const RECEPTION = new THREE.Vector3(10.5, 0, 8.5);
 const MEETING_CENTER = new THREE.Vector3(10.5, 0, -4);
 const MEETING_ROOM_W = 7.5;
 const MEETING_ROOM_D = 7.2;
+// Sitting characters face -Z by default (see buildCharacter's eye/hair
+// placement) — so a seat south of the table (more negative z) must face
+// +Z to look at it, and a seat north of it must face -Z. These were
+// previously swapped, which pointed every seated agent away from the
+// table instead of at it.
 const MEETING_SEATS: { x: number; z: number; ry: number }[] = [-1.8, 0, 1.8].flatMap((dx) => [
-  { x: MEETING_CENTER.x + dx, z: MEETING_CENTER.z - 1.45, ry: 0 },
-  { x: MEETING_CENTER.x + dx, z: MEETING_CENTER.z + 1.45, ry: Math.PI },
+  { x: MEETING_CENTER.x + dx, z: MEETING_CENTER.z - 1.45, ry: Math.PI },
+  { x: MEETING_CENTER.x + dx, z: MEETING_CENTER.z + 1.45, ry: 0 },
 ]);
 const SHELF_POS = new THREE.Vector3(-15, 0, -10);
 const PLANT_POS: THREE.Vector3[] = [
