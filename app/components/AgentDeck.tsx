@@ -400,22 +400,9 @@ export function AgentDeck({
       scene.add(f);
     });
 
-    // ---- 5x3 ceiling light-panel grid — this grid, seen from steep
-    // angles, is what read as "black lines" before; there's no truss.
-    // (The reference also has a solid semi-transparent ceiling slab above
-    // this grid, but at our camera angles it washed the whole scene out
-    // in a flat gray sheet, so it's dropped — the light panels alone
-    // already read as a ceiling.) ----
-    for (let i = -2; i <= 2; i++) {
-      for (let j = -1; j <= 1; j++) {
-        const p = new THREE.Mesh(new THREE.BoxGeometry(3.9, 0.03, 1.3), Basic(0xf0f4ff));
-        p.position.set(i * 5.85, 3.98, j * 6.5);
-        scene.add(p);
-        const pl = new THREE.PointLight(0xffffff, 0.25, 13, 1.8);
-        pl.position.set(i * 5.85, 3.8, j * 6.5);
-        scene.add(pl);
-      }
-    }
+    // No ceiling at all — an earlier ceiling-slab + light-panel-grid pass
+    // still read as unwanted stuff floating overhead from these camera
+    // angles, so the office is open to the dark void above.
 
     // ---- Conference room: glass partitions, table, 6 chairs ----
     const raycastTargets: THREE.Object3D[] = [];
