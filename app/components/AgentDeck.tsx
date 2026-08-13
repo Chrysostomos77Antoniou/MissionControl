@@ -40,7 +40,11 @@ const LANDMARKS: THREE.Vector3[] = [
   new THREE.Vector3(-3, 0, 0), // center/window — walkway between departments and the east side
 ];
 
-const ORCH_DESK = new THREE.Vector3(-9, 0, 10);
+// The largest room in the building (11x10, vs. 10x9 for the department
+// rooms and 7.5x7.2 for the conference room) and positioned prominently
+// near the entrance/reception rather than tucked in a corner.
+const ORCH_DESK = new THREE.Vector3(16, 0, 5);
+const ORCH_ROOM = { w: 11, d: 10 };
 // Nudged 2 units west of its old x=10.5 so the enlarged Orchestrator's
 // office (Task 4, x: 10.5..21.5) has clearance from it.
 const RECEPTION = new THREE.Vector3(8.5, 0, 8.5);
@@ -571,17 +575,76 @@ export function AgentDeck({
     rcLight.position.set(RECEPTION.x, 0.1, RECEPTION.z + 0.5);
     scene.add(rcLight);
 
-    // ---- Orchestrator's desk — distinct standalone desk, click opens the Orchestrator chat ----
-    const orchDesk = new THREE.Mesh(new THREE.BoxGeometry(2.2, 0.9, 1.0), Lam(0x241a33));
-    orchDesk.position.set(ORCH_DESK.x, 0.45, ORCH_DESK.z);
+    // ---- Orchestrator's office: the executive treatment. Same fully-
+    // enclosed glass-box room pattern as buildDepartmentRoom/the
+    // conference room, plus a raised dais, a bigger/glossier desk, an
+    // executive chair, warm amber lighting (matching the amber already
+    // used for "Orchestrator" throughout the app's chat UI), and a
+    // larger gold-framed sign. ----
+    ([
+      [ORCH_ROOM.w, 0.06, ORCH_DESK.x, ORCH_DESK.z - ORCH_ROOM.d / 2],
+      [ORCH_ROOM.w, 0.06, ORCH_DESK.x, ORCH_DESK.z + ORCH_ROOM.d / 2],
+    ] as const).forEach(([w, d, x, z]) => {
+      const wall = new THREE.Mesh(new THREE.BoxGeometry(w, 3.5, d), glass);
+      wall.position.set(x, 1.75, z);
+      scene.add(wall);
+    });
+    ([
+      [0.06, ORCH_ROOM.d, ORCH_DESK.x - ORCH_ROOM.w / 2, ORCH_DESK.z],
+      [0.06, ORCH_ROOM.d, ORCH_DESK.x + ORCH_ROOM.w / 2, ORCH_DESK.z],
+    ] as const).forEach(([w, d, x, z]) => {
+      const wall = new THREE.Mesh(new THREE.BoxGeometry(w, 3.5, d), glass);
+      wall.position.set(x, 1.75, z);
+      scene.add(wall);
+    });
+
+    // Dais: a low riser under the desk, ~0.15 units tall (for scale,
+    // chair seats sit at 0.44 and desk tops at ~0.73-0.9 elsewhere).
+    const dais = new THREE.Mesh(new THREE.BoxGeometry(3.4, 0.15, 2.4), Lam(0x2a2f3a));
+    dais.position.set(ORCH_DESK.x, 0.075, ORCH_DESK.z);
+    dais.receiveShadow = true;
+    scene.add(dais);
+
+    // Executive desk: bigger footprint than any department desk, glossy
+    // dark-wood-toned top instead of the flat color the old desk had.
+    const orchDesk = new THREE.Mesh(new THREE.BoxGeometry(2.8, 0.9, 1.3), Lam(0x3b2a1a));
+    orchDesk.position.set(ORCH_DESK.x, 0.15 + 0.45, ORCH_DESK.z);
     orchDesk.castShadow = true;
     scene.add(orchDesk);
-    const orchNamebar = new THREE.Mesh(new THREE.BoxGeometry(2.0, 0.06, 0.08), Basic(0xffae3b));
-    orchNamebar.position.set(ORCH_DESK.x, 0.94, ORCH_DESK.z + 0.52);
+    const orchDeskTop = new THREE.Mesh(new THREE.BoxGeometry(2.9, 0.05, 1.4), Lam(0x5a3d24, { emissive: 0x1a0f08, emissiveIntensity: 0.15 }));
+    orchDeskTop.position.set(ORCH_DESK.x, 0.15 + 0.925, ORCH_DESK.z);
+    scene.add(orchDeskTop);
+
+    // Executive chair: taller high-backed silhouette, distinct from the
+    // plain stool every other agent sits on.
+    const chairSeat = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.06, 0.55), Lam(0x241a33));
+    chairSeat.position.set(ORCH_DESK.x, 0.15 + 0.5, ORCH_DESK.z + 0.85);
+    scene.add(chairSeat);
+    const chairBack = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.85, 0.06), Lam(0x241a33));
+    chairBack.position.set(ORCH_DESK.x, 0.15 + 0.9, ORCH_DESK.z + 1.1);
+    scene.add(chairBack);
+
+    // Warm amber lighting specific to this office — stands out against
+    // the cooler general office lighting, matches the app's own
+    // "Orchestrator" amber branding.
+    const orchLight1 = new THREE.PointLight(0xffae3b, 0.9, 6, 2);
+    orchLight1.position.set(ORCH_DESK.x - 2, 3, ORCH_DESK.z);
+    scene.add(orchLight1);
+    const orchLight2 = new THREE.PointLight(0xffae3b, 0.9, 6, 2);
+    orchLight2.position.set(ORCH_DESK.x + 2, 3, ORCH_DESK.z);
+    scene.add(orchLight2);
+
+    const orchNamebar = new THREE.Mesh(new THREE.BoxGeometry(2.6, 0.08, 0.1), Basic(0xffae3b));
+    orchNamebar.position.set(ORCH_DESK.x, 0.15 + 0.98, ORCH_DESK.z + 0.68);
     scene.add(orchNamebar);
+
+    // Bigger, gold-framed sign — noticeably larger than department room
+    // labels (worldW 2.5) and every desk nameplate (worldW 2.5).
     const orchLabel = makeLabelSprite("ORCHESTRATOR", "#ffae3b");
-    orchLabel.position.set(ORCH_DESK.x, 1.75, ORCH_DESK.z);
+    orchLabel.scale.multiplyScalar(1.6);
+    orchLabel.position.set(ORCH_DESK.x, 4.6, ORCH_DESK.z);
     scene.add(orchLabel);
+
     (orchDesk.userData as { orchestrator: boolean }).orchestrator = true;
     (orchLabel.userData as { orchestrator: boolean }).orchestrator = true;
     raycastTargets.push(orchDesk, orchLabel);
