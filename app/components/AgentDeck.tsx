@@ -4,7 +4,13 @@ import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import type { AgentSpec } from "../../agents/registry";
 import type { AgentId } from "../../lib/types";
-import { DEPARTMENT_META, departmentAgents, type DepartmentId } from "../../lib/office-layout";
+import {
+  CHATTER_RANGE_SQ,
+  DEPARTMENT_META,
+  departmentAgents,
+  shouldChatter,
+  type DepartmentId,
+} from "../../lib/office-layout";
 import type { AgentStatusInfo, AgentLive } from "../../lib/agent-status";
 import { TOOL_VISUAL, DEFAULT_TOOL_VISUAL } from "../../lib/tool-visual";
 
@@ -158,6 +164,42 @@ function makeLabelSprite(text: string, color: string): THREE.Sprite {
   return sprite;
 }
 
+// Small transient speech-bubble sprite for the status-chatter mechanic —
+// visually distinct from makeLabelSprite's nameplates (light background,
+// no colored outline, so it reads as "speech" not "signage").
+function makeChatterBubble(text: string): THREE.Sprite {
+  const canvas = document.createElement("canvas");
+  canvas.width = 320;
+  canvas.height = 80;
+  const ctx = canvas.getContext("2d")!;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  let fontSize = 28;
+  const maxTextWidth = canvas.width - 32;
+  while (fontSize > 14) {
+    ctx.font = `600 ${fontSize}px system-ui, sans-serif`;
+    if (ctx.measureText(text).width <= maxTextWidth) break;
+    fontSize -= 2;
+  }
+  const textWidth = ctx.measureText(text).width;
+  const boxW = Math.min(canvas.width - 4, textWidth + 28);
+  const boxH = fontSize + 22;
+  const boxX = canvas.width / 2 - boxW / 2;
+  const boxY = canvas.height / 2 - boxH / 2;
+  ctx.fillStyle = "rgba(255,255,255,0.95)";
+  ctx.beginPath();
+  ctx.roundRect(boxX, boxY, boxW, boxH, 10);
+  ctx.fill();
+  ctx.fillStyle = "#111318";
+  ctx.fillText(text, canvas.width / 2, canvas.height / 2);
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: false }));
+  const worldW = 1.6;
+  sprite.scale.set(worldW, worldW * (canvas.height / canvas.width), 1);
+  return sprite;
+}
+
 // Two-pose voxel humanoid, matching the reference's buildChar() part
 // breakdown (legs/shoes/torso/collar/arms/head/hair/eyes/badge), built
 // once per agent per pose and toggled via visibility rather than
@@ -277,6 +319,9 @@ interface AgentRig {
   wasWorking: boolean;
   inMeeting: boolean;
   nextWanderAt: number;
+  chatterCooldownUntil: number;
+  chatterSprite: THREE.Sprite | null;
+  chatterUntil: number;
 }
 
 interface FloatBit {
@@ -738,6 +783,9 @@ export function AgentDeck({
         wasWorking: false,
         inMeeting: false,
         nextWanderAt: performance.now() + 1500 + Math.random() * 3000,
+        chatterCooldownUntil: 0,
+        chatterSprite: null,
+        chatterUntil: 0,
       });
     }
 
@@ -915,6 +963,51 @@ export function AgentDeck({
           r.monitorMat.emissiveIntensity = cyberpunkRef.current ? 0.45 : 0.15;
           r.deskLight.intensity = cyberpunkRef.current ? 0.22 : 0;
         }
+
+        // Remove this agent's chatter bubble once its display window ends.
+        if (r.chatterSprite && now > r.chatterUntil) {
+          scene.remove(r.chatterSprite);
+          r.chatterSprite = null;
+        }
+      }
+
+      // Status chatter: pairwise proximity check across all agents. Skips
+      // pairs where BOTH are seated (two desk-neighbors sitting near each
+      // other isn't an "encounter" — this only fires when at least one of
+      // them is actually out walking, most commonly a wandering agent
+      // passing a working, seated colleague's desk). O(n^2) over 12
+      // agents is 66 pairs, trivial.
+      const rigList = Array.from(rigs.entries());
+      for (let i = 0; i < rigList.length; i++) {
+        for (let j = i + 1; j < rigList.length; j++) {
+          const [aId, a] = rigList[i];
+          const [bId, b] = rigList[j];
+          if (a.seated && b.seated) continue;
+          if (a.chatterSprite || b.chatterSprite) continue;
+          const distanceSq = a.group.position.distanceToSquared(b.group.position);
+          if (distanceSq >= CHATTER_RANGE_SQ) continue;
+          const aWorking = (latestRef.current.statuses[aId]?.live ?? "idle") === "working";
+          const bWorking = (latestRef.current.statuses[bId]?.live ?? "idle") === "working";
+          const eligible = shouldChatter({
+            distanceSq,
+            aWorking,
+            bWorking,
+            aCooldownUntil: a.chatterCooldownUntil,
+            bCooldownUntil: b.chatterCooldownUntil,
+            now,
+          });
+          if (!eligible) continue;
+          const speaker = aWorking && a.chatterCooldownUntil <= now ? a : b;
+          const speakerId = speaker === a ? aId : bId;
+          const info = latestRef.current.statuses[speakerId];
+          const visual = (info?.tool && TOOL_VISUAL[info.tool]) || DEFAULT_TOOL_VISUAL;
+          const bubble = makeChatterBubble(visual.label);
+          bubble.position.set(speaker.group.position.x, 2.1, speaker.group.position.z);
+          scene.add(bubble);
+          speaker.chatterSprite = bubble;
+          speaker.chatterUntil = now + 3000;
+          speaker.chatterCooldownUntil = now + 20000 + Math.random() * 10000;
+        }
       }
 
       controls.update();
@@ -929,6 +1022,9 @@ export function AgentDeck({
       controls.dispose();
       renderer.dispose();
       if (renderer.domElement.parentElement === host) host.removeChild(renderer.domElement);
+      for (const r of rigs.values()) {
+        if (r.chatterSprite) scene.remove(r.chatterSprite);
+      }
       rigs.clear();
     };
   }, []);
