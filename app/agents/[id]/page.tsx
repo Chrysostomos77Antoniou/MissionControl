@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { recentMemory } from "../../../lib/memory";
 import { agentApprovalStats } from "../../../lib/suggestions";
 import { recentEvals } from "../../../lib/evals";
@@ -18,6 +19,13 @@ export default async function AgentDetail({ params }: { params: Promise<{ id: st
 
   return (
     <main className="p-4 max-w-2xl mx-auto">
+      <Link
+        href="/"
+        className="inline-block text-xs mb-3 transition hover:brightness-125"
+        style={{ color: "var(--text-dim)" }}
+      >
+        ← Back
+      </Link>
       <h1 className="font-bold uppercase mb-4">{agent} AGENT</h1>
 
       <div
