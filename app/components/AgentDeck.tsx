@@ -7,7 +7,9 @@ import type { AgentId } from "../../lib/types";
 import {
   CHATTER_RANGE_SQ,
   DEPARTMENT_META,
+  ROOMS,
   departmentAgents,
+  deskPositions,
   shouldChatter,
   type DepartmentId,
 } from "../../lib/office-layout";
@@ -48,15 +50,17 @@ const LANDMARKS: THREE.Vector3[] = [
 
 // The largest room in the building (11x10, vs. 10x9 for the department
 // rooms and 7.5x7.2 for the conference room) and positioned prominently
-// near the entrance/reception rather than tucked in a corner.
-const ORCH_DESK = new THREE.Vector3(16, 0, 5);
-const ORCH_ROOM = { w: 11, d: 10 };
+// near the entrance/reception rather than tucked in a corner. Derived from
+// lib/office-layout.ts's ROOMS so the numbers here and the ones the
+// office-layout geometry tests check against can never drift apart.
+const ORCH_DESK = new THREE.Vector3(ROOMS.orchestrator.center.x, 0, ROOMS.orchestrator.center.z);
+const ORCH_ROOM = ROOMS.orchestrator.size;
 // Nudged 2 units west of its old x=10.5 so the enlarged Orchestrator's
 // office (Task 4, x: 10.5..21.5) has clearance from it.
 const RECEPTION = new THREE.Vector3(8.5, 0, 8.5);
-const MEETING_CENTER = new THREE.Vector3(10.5, 0, -4);
-const MEETING_ROOM_W = 7.5;
-const MEETING_ROOM_D = 7.2;
+const MEETING_CENTER = new THREE.Vector3(ROOMS.conference.center.x, 0, ROOMS.conference.center.z);
+const MEETING_ROOM_W = ROOMS.conference.size.w;
+const MEETING_ROOM_D = ROOMS.conference.size.d;
 // Sitting characters face -Z by default (see buildCharacter's eye/hair
 // placement) — so a seat south of the table (more negative z) must face
 // +Z to look at it, and a seat north of it must face -Z. These were
@@ -66,11 +70,31 @@ const MEETING_SEATS: { x: number; z: number; ry: number }[] = [-1.8, 0, 1.8].fla
   { x: MEETING_CENTER.x + dx, z: MEETING_CENTER.z - 1.45, ry: Math.PI },
   { x: MEETING_CENTER.x + dx, z: MEETING_CENTER.z + 1.45, ry: 0 },
 ]);
-const SHELF_POS = new THREE.Vector3(-19, 0, -13);
-const FILING_CABINET_POS = new THREE.Vector3(-11, 0, -13);
+// Both offset from Trust & Legal's own DEPARTMENT_META center rather than
+// restated as absolute literals, so they can't silently go stale if the
+// room ever moves (this is what caused the plant/desk overlap below).
+const SHELF_POS = new THREE.Vector3(
+  DEPARTMENT_META["trust-legal"].center.x - 4,
+  0,
+  DEPARTMENT_META["trust-legal"].center.z - 1,
+);
+const FILING_CABINET_POS = new THREE.Vector3(
+  DEPARTMENT_META["trust-legal"].center.x + 4,
+  0,
+  DEPARTMENT_META["trust-legal"].center.z - 1,
+);
+// PLANT_POS[0] was (-16, -11) — inside Trust & Legal, only ~0.11 units from
+// community's desk-side character position (-16.25, -11.1), so the torso
+// sat fully inside the foliage mesh. Moved to the room's empty east corner,
+// past legal's desk (-13.75, -11.1) by 2.9 units — comfortably clear of
+// both desks and the glass walls (nearest wall, x=-10, is a full unit away).
+// PLANT_POS[1] was (-15, 10) — only 0.85 units from copywriter's home
+// position (-15, 9.15), a razor-thin 0.19-unit margin over their combined
+// radii. Pushed 3 units further north, clear of the Growth & Design room
+// (z <= 11.5) entirely.
 const PLANT_POS: THREE.Vector3[] = [
-  new THREE.Vector3(-16, 0, -11),
-  new THREE.Vector3(-15, 0, 10),
+  new THREE.Vector3(-11, 0, -10),
+  new THREE.Vector3(-15, 0, 13),
   new THREE.Vector3(15, 0, -11),
   new THREE.Vector3(14, 0, 12),
 ];
@@ -95,19 +119,6 @@ function GlassMat(): THREE.MeshPhysicalMaterial {
 }
 function shade(hex: string, factor: number): number {
   return new THREE.Color(hex).multiplyScalar(factor).getHex();
-}
-
-function deskPositions(count: number, cols: number, cx: number, cz: number, spacing: number) {
-  const rows = Math.ceil(count / cols);
-  const out: { x: number; z: number }[] = [];
-  const w = (cols - 1) * spacing;
-  const d = (rows - 1) * spacing;
-  for (let i = 0; i < count; i++) {
-    const c = i % cols;
-    const r = Math.floor(i / cols);
-    out.push({ x: cx - w / 2 + c * spacing, z: cz - d / 2 + r * spacing });
-  }
-  return out;
 }
 
 function makeSignTexture(text: string): THREE.CanvasTexture {
@@ -447,56 +458,53 @@ export function AgentDeck({
     // still read as unwanted stuff floating overhead from these camera
     // angles, so the office is open to the dark void above.
 
-    // ---- Department rooms: same fully-enclosed glass-box pattern as the
-    // conference room below (4 full walls, no doorway gap — agents have
-    // no collision detection anywhere in this file, so they already walk
-    // straight through the conference room's glass today; department
-    // rooms follow the same precedent rather than inventing new
-    // wall-collision/doorway logic). ----
-    function buildDepartmentRoom(meta: (typeof DEPARTMENT_META)[DepartmentId]) {
-      const hw = meta.size.w / 2;
-      const hd = meta.size.d / 2;
+    // ---- Shared glass-box room builder: 4 full walls (no doorway gap —
+    // agents have no collision detection anywhere in this file, so they
+    // already walk straight through glass today) plus an optional
+    // billboarded label. Used for the three department rooms, the
+    // conference room, and the Orchestrator's office — previously each of
+    // those three sites rebuilt the identical wall loop inline. Only the
+    // wall/label construction is unified here; each room's own furniture
+    // (desks, table/chairs, dais/desk/chair) stays at its own call site. ----
+    function buildGlassRoom(
+      center: { x: number; z: number },
+      size: { w: number; d: number },
+      label?: { text: string; color: string; scale?: number; y?: number },
+    ): THREE.Sprite | undefined {
+      const hw = size.w / 2;
+      const hd = size.d / 2;
       ([
-        [meta.size.w, 0.06, meta.center.x, meta.center.z - hd],
-        [meta.size.w, 0.06, meta.center.x, meta.center.z + hd],
+        [size.w, 0.06, center.x, center.z - hd],
+        [size.w, 0.06, center.x, center.z + hd],
       ] as const).forEach(([w, d, x, z]) => {
         const wall = new THREE.Mesh(new THREE.BoxGeometry(w, 3.5, d), glass);
         wall.position.set(x, 1.75, z);
         scene.add(wall);
       });
       ([
-        [0.06, meta.size.d, meta.center.x - hw, meta.center.z],
-        [0.06, meta.size.d, meta.center.x + hw, meta.center.z],
+        [0.06, size.d, center.x - hw, center.z],
+        [0.06, size.d, center.x + hw, center.z],
       ] as const).forEach(([w, d, x, z]) => {
         const wall = new THREE.Mesh(new THREE.BoxGeometry(w, 3.5, d), glass);
         wall.position.set(x, 1.75, z);
         scene.add(wall);
       });
-      const label = makeLabelSprite(meta.name, "#38bdf8");
-      label.position.set(meta.center.x, 4.3, meta.center.z);
-      scene.add(label);
+      if (!label) return undefined;
+      const sprite = makeLabelSprite(label.text, label.color);
+      if (label.scale) sprite.scale.multiplyScalar(label.scale);
+      sprite.position.set(center.x, label.y ?? 4.3, center.z);
+      scene.add(sprite);
+      return sprite;
     }
 
-    (Object.keys(DEPARTMENT_META) as DepartmentId[]).forEach((id) => buildDepartmentRoom(DEPARTMENT_META[id]));
+    (Object.keys(DEPARTMENT_META) as DepartmentId[]).forEach((id) => {
+      const meta = DEPARTMENT_META[id];
+      buildGlassRoom(meta.center, meta.size, { text: meta.name, color: "#38bdf8" });
+    });
 
     // ---- Conference room: glass partitions, table, 6 chairs ----
     const raycastTargets: THREE.Object3D[] = [];
-    ([
-      [MEETING_ROOM_W, 0.06, MEETING_CENTER.x, MEETING_CENTER.z - MEETING_ROOM_D / 2],
-      [MEETING_ROOM_W, 0.06, MEETING_CENTER.x, MEETING_CENTER.z + MEETING_ROOM_D / 2],
-    ] as const).forEach(([w, d, x, z]) => {
-      const wall = new THREE.Mesh(new THREE.BoxGeometry(w, 3.5, d), glass);
-      wall.position.set(x, 1.75, z);
-      scene.add(wall);
-    });
-    ([
-      [0.06, MEETING_ROOM_D, MEETING_CENTER.x - MEETING_ROOM_W / 2, MEETING_CENTER.z],
-      [0.06, MEETING_ROOM_D, MEETING_CENTER.x + MEETING_ROOM_W / 2, MEETING_CENTER.z],
-    ] as const).forEach(([w, d, x, z]) => {
-      const wall = new THREE.Mesh(new THREE.BoxGeometry(w, 3.5, d), glass);
-      wall.position.set(x, 1.75, z);
-      scene.add(wall);
-    });
+    buildGlassRoom(MEETING_CENTER, { w: MEETING_ROOM_W, d: MEETING_ROOM_D }, { text: "CONFERENCE ROOM", color: "#38bdf8" });
     const mTable = new THREE.Mesh(new THREE.BoxGeometry(4.9, 0.08, 2.0), Lam(0xdde4ec));
     mTable.position.set(MEETING_CENTER.x, 0.72, MEETING_CENTER.z);
     mTable.castShadow = true;
@@ -509,9 +517,6 @@ export function AgentDeck({
       back.position.set(seat.x, 0.67, seat.z + (seat.ry === 0 ? 0.19 : -0.19));
       scene.add(back);
     });
-    const meetingLabel = makeLabelSprite("CONFERENCE ROOM", "#38bdf8");
-    meetingLabel.position.set(MEETING_CENTER.x, 4.3, MEETING_CENTER.z);
-    scene.add(meetingLabel);
 
     // ---- Bookshelf, plants, sticky notes, lounge couch, floating particles ----
     const shelfFrame = new THREE.Mesh(new THREE.BoxGeometry(1.7, 1.4, 0.4), Lam(0xd8dde6));
@@ -531,8 +536,12 @@ export function AgentDeck({
     scene.add(cabinetHandle);
 
     // Engineering room theme prop: a small server rack in the room's
-    // west corner (center {-15,-3}, size 10x9 -> interior x:[-20,-10]).
-    const rackCenter = { x: -19, z: -6.5 };
+    // west corner, offset from DEPARTMENT_META.engineering's own center
+    // so it can't go stale if the room ever moves.
+    const rackCenter = {
+      x: DEPARTMENT_META.engineering.center.x - 4,
+      z: DEPARTMENT_META.engineering.center.z - 3.5,
+    };
     const rack = new THREE.Mesh(new THREE.BoxGeometry(0.6, 1.6, 0.6), Lam(0x1f2937));
     rack.position.set(rackCenter.x, 0.8, rackCenter.z);
     rack.castShadow = true;
@@ -544,9 +553,13 @@ export function AgentDeck({
     });
 
     // Growth & Design room theme prop: a freestanding mood-board panel
-    // on a simple stand, standing in the room's west corner (center
-    // {-15,7}, size 10x9 -> interior x:[-20,-10]).
-    const boardCenter = { x: -19, z: 4.5 };
+    // on a simple stand, standing in the room's west corner, offset from
+    // DEPARTMENT_META["growth-design"]'s own center so it can't go stale
+    // if the room ever moves.
+    const boardCenter = {
+      x: DEPARTMENT_META["growth-design"].center.x - 4,
+      z: DEPARTMENT_META["growth-design"].center.z - 2.5,
+    };
     const boardStandL = new THREE.Mesh(new THREE.BoxGeometry(0.04, 1.2, 0.04), Lam(0x8a93a8));
     boardStandL.position.set(boardCenter.x - 0.6, 0.6, boardCenter.z);
     scene.add(boardStandL);
@@ -621,27 +634,20 @@ export function AgentDeck({
     scene.add(rcLight);
 
     // ---- Orchestrator's office: the executive treatment. Same fully-
-    // enclosed glass-box room pattern as buildDepartmentRoom/the
-    // conference room, plus a raised dais, a bigger/glossier desk, an
-    // executive chair, warm amber lighting (matching the amber already
-    // used for "Orchestrator" throughout the app's chat UI), and a
-    // larger gold-framed sign. ----
-    ([
-      [ORCH_ROOM.w, 0.06, ORCH_DESK.x, ORCH_DESK.z - ORCH_ROOM.d / 2],
-      [ORCH_ROOM.w, 0.06, ORCH_DESK.x, ORCH_DESK.z + ORCH_ROOM.d / 2],
-    ] as const).forEach(([w, d, x, z]) => {
-      const wall = new THREE.Mesh(new THREE.BoxGeometry(w, 3.5, d), glass);
-      wall.position.set(x, 1.75, z);
-      scene.add(wall);
-    });
-    ([
-      [0.06, ORCH_ROOM.d, ORCH_DESK.x - ORCH_ROOM.w / 2, ORCH_DESK.z],
-      [0.06, ORCH_ROOM.d, ORCH_DESK.x + ORCH_ROOM.w / 2, ORCH_DESK.z],
-    ] as const).forEach(([w, d, x, z]) => {
-      const wall = new THREE.Mesh(new THREE.BoxGeometry(w, 3.5, d), glass);
-      wall.position.set(x, 1.75, z);
-      scene.add(wall);
-    });
+    // enclosed glass-box room pattern as the department rooms/conference
+    // room above (via buildGlassRoom), plus a raised dais, a
+    // bigger/glossier desk, an executive chair, warm amber lighting
+    // (matching the amber already used for "Orchestrator" throughout the
+    // app's chat UI), and a larger gold-framed sign — the label's bigger
+    // scale and amber color (vs. the department/conference rooms'
+    // hardcoded "#38bdf8") are why buildGlassRoom takes an optional
+    // scale/color/y rather than always drawing an identical label. ----
+    const orchLabel = buildGlassRoom(ORCH_DESK, ORCH_ROOM, {
+      text: "ORCHESTRATOR",
+      color: "#ffae3b",
+      scale: 1.6,
+      y: 4.6,
+    })!;
 
     // Dais: a low riser under the desk, ~0.15 units tall (for scale,
     // chair seats sit at 0.44 and desk tops at ~0.73-0.9 elsewhere).
@@ -682,13 +688,6 @@ export function AgentDeck({
     const orchNamebar = new THREE.Mesh(new THREE.BoxGeometry(2.6, 0.08, 0.1), Basic(0xffae3b));
     orchNamebar.position.set(ORCH_DESK.x, 0.15 + 0.98, ORCH_DESK.z + 0.68);
     scene.add(orchNamebar);
-
-    // Bigger, gold-framed sign — noticeably larger than department room
-    // labels (worldW 2.5) and every desk nameplate (worldW 2.5).
-    const orchLabel = makeLabelSprite("ORCHESTRATOR", "#ffae3b");
-    orchLabel.scale.multiplyScalar(1.6);
-    orchLabel.position.set(ORCH_DESK.x, 4.6, ORCH_DESK.z);
-    scene.add(orchLabel);
 
     (orchDesk.userData as { orchestrator: boolean }).orchestrator = true;
     (orchLabel.userData as { orchestrator: boolean }).orchestrator = true;
@@ -964,10 +963,22 @@ export function AgentDeck({
           r.deskLight.intensity = cyberpunkRef.current ? 0.22 : 0;
         }
 
-        // Remove this agent's chatter bubble once its display window ends.
-        if (r.chatterSprite && now > r.chatterUntil) {
-          scene.remove(r.chatterSprite);
-          r.chatterSprite = null;
+        // Chatter bubble upkeep: while alive, track its speaker every frame
+        // (the speaker is frequently mid-walk at 2.2 units/s, so a
+        // spawn-once position would quickly strand the bubble); once its
+        // display window ends, remove it and dispose its GPU resources —
+        // each bubble allocates a fresh CanvasTexture + SpriteMaterial, and
+        // at ~12 agents chattering every 20-30s this would otherwise leak
+        // ~170MB/hour on a dashboard meant to run all day.
+        if (r.chatterSprite) {
+          if (now > r.chatterUntil) {
+            scene.remove(r.chatterSprite);
+            r.chatterSprite.material.map?.dispose();
+            r.chatterSprite.material.dispose();
+            r.chatterSprite = null;
+          } else {
+            r.chatterSprite.position.set(r.group.position.x, 2.1, r.group.position.z);
+          }
         }
       }
 
@@ -1023,7 +1034,11 @@ export function AgentDeck({
       renderer.dispose();
       if (renderer.domElement.parentElement === host) host.removeChild(renderer.domElement);
       for (const r of rigs.values()) {
-        if (r.chatterSprite) scene.remove(r.chatterSprite);
+        if (r.chatterSprite) {
+          scene.remove(r.chatterSprite);
+          r.chatterSprite.material.map?.dispose();
+          r.chatterSprite.material.dispose();
+        }
       }
       rigs.clear();
     };

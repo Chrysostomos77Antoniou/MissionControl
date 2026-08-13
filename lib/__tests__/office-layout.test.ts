@@ -4,9 +4,31 @@ import {
   AGENT_DEPARTMENT,
   CHATTER_RANGE_SQ,
   DEPARTMENT_META,
+  ROOMS,
   departmentAgents,
+  deskPositions,
   shouldChatter,
+  type DepartmentId,
+  type RoomId,
+  type RoomSpec,
 } from "../office-layout";
+
+// Axis-aligned bounds of a room, derived from its center/size — the same
+// shape buildGlassRoom in AgentDeck.tsx uses to place its 4 walls.
+function bounds(room: RoomSpec) {
+  return {
+    xMin: room.center.x - room.size.w / 2,
+    xMax: room.center.x + room.size.w / 2,
+    zMin: room.center.z - room.size.d / 2,
+    zMax: room.center.z + room.size.d / 2,
+  };
+}
+
+function overlaps(a: RoomSpec, b: RoomSpec): boolean {
+  const A = bounds(a);
+  const B = bounds(b);
+  return A.xMin < B.xMax && A.xMax > B.xMin && A.zMin < B.zMax && A.zMax > B.zMin;
+}
 
 describe("AGENT_DEPARTMENT", () => {
   it("assigns exactly one department to every agent in the registry", () => {
@@ -127,5 +149,57 @@ describe("shouldChatter", () => {
         now,
       }),
     ).toBe(false);
+  });
+});
+
+// Regression coverage for the whole-branch review's Finding 1 (a decor
+// plant landing inside a desk's occupied space after a room moved) and
+// Finding 5 (theme-prop coordinates silently drifting from the room they're
+// supposed to sit in). Both bugs were pure arithmetic — no WebGL needed to
+// catch them.
+describe("ROOMS", () => {
+  const FLOOR_W = 48;
+  const FLOOR_D = 34;
+
+  it("fits every room inside the 48x34 floor", () => {
+    for (const id of Object.keys(ROOMS) as RoomId[]) {
+      const b = bounds(ROOMS[id]);
+      expect(b.xMin).toBeGreaterThanOrEqual(-FLOOR_W / 2);
+      expect(b.xMax).toBeLessThanOrEqual(FLOOR_W / 2);
+      expect(b.zMin).toBeGreaterThanOrEqual(-FLOOR_D / 2);
+      expect(b.zMax).toBeLessThanOrEqual(FLOOR_D / 2);
+    }
+  });
+
+  it("has no two rooms overlapping", () => {
+    const ids = Object.keys(ROOMS) as RoomId[];
+    for (let i = 0; i < ids.length; i++) {
+      for (let j = i + 1; j < ids.length; j++) {
+        expect(overlaps(ROOMS[ids[i]], ROOMS[ids[j]])).toBe(false);
+      }
+    }
+  });
+});
+
+describe("deskPositions within department rooms", () => {
+  it("keeps every desk, and its occupant's home position (desk z + 0.9), inside that department's own room bounds", () => {
+    const ids = Object.keys(DEPARTMENT_META) as DepartmentId[];
+    expect(ids.length).toBeGreaterThan(0);
+    for (const id of ids) {
+      const meta = DEPARTMENT_META[id];
+      const specs = departmentAgents(id);
+      expect(specs.length).toBeGreaterThan(0);
+      const positions = deskPositions(specs.length, meta.cols, meta.center.x, meta.center.z, meta.spacing);
+      const b = bounds(ROOMS[id]);
+      for (const pos of positions) {
+        expect(pos.x).toBeGreaterThanOrEqual(b.xMin);
+        expect(pos.x).toBeLessThanOrEqual(b.xMax);
+        expect(pos.z).toBeGreaterThanOrEqual(b.zMin);
+        expect(pos.z).toBeLessThanOrEqual(b.zMax);
+        const homeZ = pos.z + 0.9;
+        expect(homeZ).toBeGreaterThanOrEqual(b.zMin);
+        expect(homeZ).toBeLessThanOrEqual(b.zMax);
+      }
+    }
   });
 });
