@@ -10,7 +10,7 @@
 
 ## Global Constraints
 
-- Floor grows to 48×32 (`FLOOR_W = 48`, `FLOOR_D = 34` — see Task 2 for why the depth is 34, not 32 as originally estimated in the spec; the extra 2 units were needed to fit the department column without overlapping the conference room once exact coordinates were worked out).
+- Floor grows to 48×34 (`FLOOR_W = 48`, `FLOOR_D = 34` — the depth grew from the spec's original ~32 estimate; the extra 2 units were needed to fit the department column without overlapping the conference room once exact coordinates were worked out).
 - Room walls are full-height, fully enclosed glass boxes (`GlassMat()`), matching the existing conference room exactly — no doorway gaps, no new collision system. Agents already walk through the conference room's glass walls today (no collision detection anywhere in this file); department rooms follow the same precedent.
 - No fabricated chatter dialogue — bubbles only ever show real `TOOL_VISUAL` label text for an agent that is genuinely `working`.
 - Every task's TypeScript changes must pass `npx tsc --noEmit` and `npm run lint` with zero *new* errors (the repo has 4 known pre-existing, unrelated lint errors in `TopMenu.tsx` and `ChatPanel.tsx` — do not try to fix those, just confirm the count doesn't grow).
