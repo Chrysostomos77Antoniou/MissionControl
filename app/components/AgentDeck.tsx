@@ -34,18 +34,20 @@ import { TOOL_VISUAL, DEFAULT_TOOL_VISUAL } from "../../lib/tool-visual";
 // status, and meetings use a lightweight randomized scheduler, since there
 // is no real "time of day" concept in this app.
 
-// Floor grows to fit three real department rooms (see lib/office-layout.ts)
-// plus the shared common area, conference room, and the Orchestrator's
-// office, none of which overlap — coordinates hand-derived in the
-// 2026-08-13 department-offices plan.
-const FLOOR_W = 48;
-const FLOOR_D = 34;
+// Floor fits three real department rooms side by side in one row (see
+// lib/office-layout.ts) plus the shared common area, conference room,
+// and the Orchestrator's office, pulled up close behind that row rather
+// than spread out across a much larger floor — coordinates hand-derived
+// to keep the whole building compact instead of leaving a dead void in
+// the middle.
+const FLOOR_W = 38;
+const FLOOR_D = 32;
 const SKIN = 0xdeb887;
 
 const LANDMARKS: THREE.Vector3[] = [
-  new THREE.Vector3(4, 0, 8), // water cooler
-  new THREE.Vector3(4, 0, -8), // lounge (couch below)
-  new THREE.Vector3(-3, 0, 0), // center/window — walkway between departments and the east side
+  new THREE.Vector3(1, 0, 8), // water cooler
+  new THREE.Vector3(-6, 0, 10), // lounge (couch below)
+  new THREE.Vector3(1, 0, -1), // center/window — the gap between the Orchestrator's office and the conference room
 ];
 
 // The largest room in the building (11x10, vs. 10x9 for the department
@@ -55,9 +57,9 @@ const LANDMARKS: THREE.Vector3[] = [
 // office-layout geometry tests check against can never drift apart.
 const ORCH_DESK = new THREE.Vector3(ROOMS.orchestrator.center.x, 0, ROOMS.orchestrator.center.z);
 const ORCH_ROOM = ROOMS.orchestrator.size;
-// Nudged 2 units west of its old x=10.5 so the enlarged Orchestrator's
-// office (Task 4, x: 10.5..21.5) has clearance from it.
-const RECEPTION = new THREE.Vector3(8.5, 0, 8.5);
+// South of the conference room, same x column, clear of both it and the
+// water cooler/lounge.
+const RECEPTION = new THREE.Vector3(7, 0, 7);
 const MEETING_CENTER = new THREE.Vector3(ROOMS.conference.center.x, 0, ROOMS.conference.center.z);
 const MEETING_ROOM_W = ROOMS.conference.size.w;
 const MEETING_ROOM_D = ROOMS.conference.size.d;
@@ -83,26 +85,23 @@ const FILING_CABINET_POS = new THREE.Vector3(
   0,
   DEPARTMENT_META["trust-legal"].center.z - 1,
 );
-// PLANT_POS[0] was (-16, -11) — inside Trust & Legal, only ~0.11 units from
-// community's desk-side character position (-16.25, -11.1), so the torso
-// sat fully inside the foliage mesh. Moved to the room's empty east corner,
-// past legal's desk (-13.75, -11.1) by 2.9 units — comfortably clear of
-// both desks and the glass walls (nearest wall, x=-10, is a full unit away).
-// PLANT_POS[1] was (-15, 10) — only 0.85 units from copywriter's home
-// position (-15, 9.15), a razor-thin 0.19-unit margin over their combined
-// radii. Pushed 3 units further north, clear of the Growth & Design room
-// (z <= 11.5) entirely.
+// All four repositioned for the side-by-side department row: each sits in
+// open floor south of its nearest room (department rooms end at z=-5.5),
+// clear of every desk's character position and every other room's walls
+// by several units — verified by hand, not tucked into a room corner this
+// time so a future room resize can't quietly walk a desk back into one
+// the way it did before this layout change.
 const PLANT_POS: THREE.Vector3[] = [
-  new THREE.Vector3(-11, 0, -10),
-  new THREE.Vector3(-15, 0, 13),
-  new THREE.Vector3(15, 0, -11),
-  new THREE.Vector3(14, 0, 12),
+  new THREE.Vector3(-15, 0, -3),
+  new THREE.Vector3(15, 0, -3),
+  new THREE.Vector3(-9, 0, 9),
+  new THREE.Vector3(11, 0, 10),
 ];
 const STICKY_POS: THREE.Vector3[] = [
-  new THREE.Vector3(-3, 0.01, 1),
-  new THREE.Vector3(-5, 0.01, 3),
-  new THREE.Vector3(-9, 0.01, -5.5),
-  new THREE.Vector3(-2, 0.01, 4),
+  new THREE.Vector3(2, 0.01, -3),
+  new THREE.Vector3(-2, 0.01, -1),
+  new THREE.Vector3(4, 0.01, -1),
+  new THREE.Vector3(0, 0.01, 3),
 ];
 const HAIR_COLORS = [0x2b2b2b, 0x4a3222, 0x1a1a1a, 0x6b4423, 0x3a2a1a, 0x262626, 0x8b4513, 0x4e342e];
 const FLOAT_COLORS = [0x22d3ee, 0xec4899, 0x38bdf8, 0xf472b6];
@@ -429,8 +428,8 @@ export function AgentDeck({
     floor.position.y = -0.075;
     floor.receiveShadow = true;
     scene.add(floor);
-    const carpet = new THREE.Mesh(new THREE.BoxGeometry(13, 0.02, 10.4), Lam(0xd0d8e0));
-    carpet.position.set(-3.9, 0.01, 0);
+    const carpet = new THREE.Mesh(new THREE.BoxGeometry(14, 0.02, 8), Lam(0xd0d8e0));
+    carpet.position.set(1, 0.01, -2);
     carpet.receiveShadow = true;
     scene.add(carpet);
 

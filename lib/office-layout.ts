@@ -29,14 +29,18 @@ export const AGENT_DEPARTMENT: Record<AgentId, DepartmentId> = {
   legal: "trust-legal",
 };
 
-// Coordinates worked out by hand to fit a 48x34 floor (x: -24..24,
-// z: -17..17) with zero room overlap — see the plan's Task 2 for the
-// full derivation. All three department rooms share the west column
-// (x center -15, width 10) stacked along z with 1-unit walking gaps.
+// Coordinates worked out by hand to fit a 38x32 floor (x: -19..19,
+// z: -16..16) with zero room overlap. All three department rooms sit
+// side by side in one row along the north edge (same z center, 10-wide
+// each, ~1.5-unit walking gaps between) rather than stacked front-to-back
+// — the original stacked layout left a large dead void in the middle of
+// the floor between the room column and the conference/Orchestrator
+// cluster; this row, plus pulling that cluster up close behind it,
+// removes that void.
 export const DEPARTMENT_META: Record<DepartmentId, DepartmentMeta> = {
-  "trust-legal": { name: "TRUST & LEGAL", center: { x: -15, z: -12 }, size: { w: 10, d: 6 }, cols: 2, spacing: 2.5 },
-  engineering: { name: "ENGINEERING", center: { x: -15, z: -3 }, size: { w: 10, d: 9 }, cols: 3, spacing: 2.5 },
-  "growth-design": { name: "GROWTH & DESIGN", center: { x: -15, z: 7 }, size: { w: 10, d: 9 }, cols: 3, spacing: 2.5 },
+  "trust-legal": { name: "TRUST & LEGAL", center: { x: -11.5, z: -10 }, size: { w: 10, d: 9 }, cols: 2, spacing: 2.5 },
+  engineering: { name: "ENGINEERING", center: { x: 0, z: -10 }, size: { w: 10, d: 9 }, cols: 3, spacing: 2.5 },
+  "growth-design": { name: "GROWTH & DESIGN", center: { x: 11.5, z: -10 }, size: { w: 10, d: 9 }, cols: 3, spacing: 2.5 },
 };
 
 export function departmentAgents(department: DepartmentId): AgentSpec[] {
@@ -67,7 +71,7 @@ export interface RoomSpec {
 
 export type RoomId = DepartmentId | "conference" | "orchestrator";
 
-// Single source of truth for every enclosed room's footprint on the 48x34
+// Single source of truth for every enclosed room's footprint on the 38x32
 // floor — the three department rooms (reusing DEPARTMENT_META's own
 // center/size, not a retyped copy of the same numbers), the conference
 // room, and the Orchestrator's office. AgentDeck.tsx derives its
@@ -75,12 +79,17 @@ export type RoomId = DepartmentId | "conference" | "orchestrator";
 // this instead of hardcoding them a second time, so a room can only ever
 // move in one place. See office-layout.test.ts for the overlap/floor-fit
 // invariant this is meant to protect.
+//
+// Conference and Orchestrator sit directly south of the department row
+// (row's z max is -5.5) with ~1.4-1.5 unit gaps — close enough that the
+// floor reads as one connected building, not two clusters split by open
+// space.
 export const ROOMS: Record<RoomId, RoomSpec> = {
   "trust-legal": DEPARTMENT_META["trust-legal"],
   engineering: DEPARTMENT_META.engineering,
   "growth-design": DEPARTMENT_META["growth-design"],
-  conference: { center: { x: 10.5, z: -4 }, size: { w: 7.5, d: 7.2 } },
-  orchestrator: { center: { x: 16, z: 5 }, size: { w: 11, d: 10 } },
+  conference: { center: { x: 7, z: -0.5 }, size: { w: 7.5, d: 7.2 } },
+  orchestrator: { center: { x: -6, z: 1 }, size: { w: 11, d: 10 } },
 };
 
 // Squared distance (avoids a sqrt per pair per frame across 66 agent
