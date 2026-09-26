@@ -85,10 +85,18 @@ export function toolsFor(agent: AgentId): Anthropic.Tool[] {
 // changes now go exclusively through lib/qa-loop.ts -> branch -> CI -> PR ->
 // human review and merge. Migrations are committed as files, never executed.
 
+// Loop-supplied context for a tool call. Never derived from model output, so
+// the model cannot set it. Used by the free loop's claim guard.
+export interface DispatchContext {
+  notify?: boolean; // false = do not send the high-priority Telegram alert
+  appendix?: string; // appended to a saved suggestion's body (unverified note + provenance)
+}
+
 export async function dispatchTool(
   agent: AgentId,
   name: string,
   input: Record<string, unknown>,
+  ctx?: DispatchContext,
 ): Promise<string> {
   // Defence in depth (the loop already enforces per-turn offering): never run
   // a known tool for an agent whose toolset doesn't include it.
@@ -111,7 +119,8 @@ export async function dispatchTool(
         ? String(input.priority)
         : "medium") as "low" | "medium" | "high";
       const evidence = String(input.evidence ?? "").trim();
-      const body = evidence ? `${String(input.body)}\n\n— Evidence: ${evidence}` : String(input.body);
+      const withEvidence = evidence ? `${String(input.body)}\n\n— Evidence: ${evidence}` : String(input.body);
+      const body = ctx?.appendix ? `${withEvidence}\n\n${ctx.appendix}` : withEvidence;
       await saveSuggestion({
         agent,
         category: String(input.category ?? "general"),
@@ -119,7 +128,9 @@ export async function dispatchTool(
         body,
         priority,
       });
-      if (priority === "high") {
+      // Suggestions with unverified figures are still saved for human review,
+      // but never push an immediate alert.
+      if (priority === "high" && ctx?.notify !== false) {
         await notify(`🔴 ${AGENT_BY_ID[agent]?.name ?? agent} flagged (high): ${String(input.title)}`);
       }
       return "Saved to the owner's suggestions inbox.";

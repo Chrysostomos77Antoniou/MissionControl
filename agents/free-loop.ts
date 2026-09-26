@@ -14,7 +14,8 @@
 import { freeLlm, type TaskTier } from "../lib/free-llm";
 import { toLlmToolSpec, type LlmMessage, type LlmToolSpec } from "../lib/llm";
 import { isLlmError, FREE_AI_QUOTA_EXHAUSTED } from "../lib/llm-errors";
-import { dispatchTool } from "../tools/registry";
+import { dispatchTool, type DispatchContext } from "../tools/registry";
+import { guardSuggestion } from "../lib/claim-guard";
 import { logActivity } from "../lib/memory";
 import { offeredToolNames, isToolOffered, rejectedToolMessage, SECURITY_TOOL_REJECTED } from "../lib/tool-guard";
 import type { AgentId } from "../lib/types";
@@ -51,7 +52,7 @@ export async function runFreeLoop(opts: {
   userMessage: string;
   tools: ToolDef[];
   maxTurns?: number;
-  dispatch?: (agent: AgentId, name: string, input: Record<string, unknown>) => Promise<string>;
+  dispatch?: (agent: AgentId, name: string, input: Record<string, unknown>, ctx?: DispatchContext) => Promise<string>;
 }): Promise<LoopOutput> {
   const { agent, tier, system, userMessage, maxTurns = 8, dispatch = dispatchTool } = opts;
   const tools: LlmToolSpec[] = opts.tools.map(toToolSpec);
@@ -98,7 +99,30 @@ export async function runFreeLoop(opts: {
         continue;
       }
       await logActivity(agent, `tool:${call.name}`, JSON.stringify(call.input).slice(0, 300));
-      const out = await dispatch(agent, call.name, call.input);
+      let input = call.input;
+      let ctx: DispatchContext | undefined;
+      if (call.name === "save_suggestion") {
+        // Deterministic claim guard: every figure must appear in (or, for
+        // ratios, be derivable from) this cycle's data. Unverified ones are
+        // marked, footnoted, and suppress the immediate alert. Provenance is
+        // the provider/model that actually produced this turn.
+        const g = guardSuggestion(
+          { title: String(input.title ?? ""), body: String(input.body ?? ""), evidence: String(input.evidence ?? "") },
+          { data: toolOutputs, context: [userMessage, system] },
+          `${res.provider}/${res.model}`,
+        );
+        input = { ...input, title: g.title, body: g.body, ...(input.evidence !== undefined ? { evidence: g.evidence } : {}) };
+        ctx = { notify: g.unverified.length === 0, appendix: g.footer };
+        if (g.unverified.length) {
+          try {
+            await logActivity(agent, "claims:unverified", g.unverified.join(", ").slice(0, 200));
+          } catch {
+            // never let logging block the save
+          }
+        }
+      }
+      // Only save_suggestion gets a guard context; other tools keep the plain call.
+      const out = ctx ? await dispatch(agent, call.name, input, ctx) : await dispatch(agent, call.name, input);
       toolOutputs.push(out);
       results.push({ role: "tool", toolCallId: call.id, name: call.name, content: out });
     }

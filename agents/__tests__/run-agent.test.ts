@@ -1,9 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-const { runFreeLoop } = vi.hoisted(() => ({ runFreeLoop: vi.fn() }));
+const { runFreeLoop, writeMemory } = vi.hoisted(() => ({ runFreeLoop: vi.fn(), writeMemory: vi.fn() }));
 vi.mock("../free-loop", () => ({ runFreeLoop }));
 vi.mock("../../lib/supabase", () => ({ supabaseAdmin: {} }));
-vi.mock("../../lib/memory", () => ({ writeMemory: vi.fn(), recentMemory: vi.fn().mockResolvedValue([]), logActivity: vi.fn() }));
+vi.mock("../../lib/memory", () => ({ writeMemory: (...a: unknown[]) => writeMemory(...a), recentMemory: vi.fn().mockResolvedValue([]), logActivity: vi.fn() }));
 vi.mock("../../lib/suggestions", () => ({
   openSuggestionsForAgent: vi.fn().mockResolvedValue([]),
   allOpenSuggestionsDigest: vi.fn().mockResolvedValue([]),
@@ -29,6 +29,7 @@ import { toolsFor } from "../../tools/registry";
 
 beforeEach(() => {
   runFreeLoop.mockReset();
+  writeMemory.mockReset();
   runFreeLoop.mockResolvedValue({ text: "cycle summary", toolOutputs: [] });
 });
 
@@ -50,5 +51,20 @@ describe("run-agent on the free loop", () => {
     expect(o.maxTurns).toBe(16);
     expect(o.userMessage).toMatch(/Run your review now per your standard procedure\.$/);
     expect(Object.keys(o).sort()).toEqual(["agent", "maxTurns", "system", "tier", "tools", "userMessage"]);
+  });
+
+  it("15. memory: a summary with figures not in this cycle's data is stored annotated, not as fact", async () => {
+    runFreeLoop.mockResolvedValue({ text: "Engagement is 6% across 19 existing users.", toolOutputs: ["[{\"users\":19}]"] });
+    const text = await runOne("growth");
+    const stored = writeMemory.mock.calls[0][1] as string;
+    expect(writeMemory).toHaveBeenCalledTimes(1);
+    expect(stored).toBe("[⚠ figures marked [unverified] were not in this cycle's data] Engagement is 6% [unverified] across 19 existing users.");
+    expect(text).toBe("Engagement is 6% across 19 existing users."); // the caller still gets the raw text
+  });
+
+  it("16. memory: a fully verified summary is stored unchanged", async () => {
+    runFreeLoop.mockResolvedValue({ text: "2 of 19 users active (10.5%).", toolOutputs: ["[{\"users\":19,\"active\":2}]"] });
+    await runOne("growth");
+    expect(writeMemory).toHaveBeenCalledWith("growth", "2 of 19 users active (10.5%).");
   });
 });

@@ -1,5 +1,6 @@
 import { runFreeLoop } from "./free-loop";
 import { tierForAgent } from "./agent-tiers";
+import { guardSummary } from "../lib/claim-guard";
 import { AGENTS, AGENT_BY_ID, type AgentSpec } from "./registry";
 import { toolsFor } from "../tools/registry";
 import { writeMemory, recentMemory, logActivity } from "../lib/memory";
@@ -51,7 +52,7 @@ export async function runAgent(spec: AgentSpec): Promise<string> {
     const cycleStart = new Date().toISOString();
     // Free-only path: the router picks an approved free model for this
     // agent's tier (agents/agent-tiers.ts); no Anthropic call.
-    const { text } = await runFreeLoop({
+    const { text, toolOutputs } = await runFreeLoop({
       agent: spec.id,
       tier: tierForAgent(spec.id),
       system: spec.system,
@@ -63,7 +64,11 @@ export async function runAgent(spec: AgentSpec): Promise<string> {
       // a successful run. Paired with the wrap-up nudge in run-loop.ts.
       maxTurns: 16,
     });
-    await writeMemory(spec.id, text.slice(0, 500));
+    // Figures not found in (or derivable from) this cycle's data are marked
+    // [unverified] before they can be replayed to future cycles as "your own
+    // conclusions". Verified summaries are stored unchanged.
+    const memory = guardSummary(text, { data: toolOutputs, context: [userMessage, spec.system] });
+    await writeMemory(spec.id, memory.text.slice(0, 500));
 
     // Never let a grading failure affect the cycle that triggered it —
     // same non-blocking pattern as alertIfCredentialsBroken/reviewCycleConsensus above.
