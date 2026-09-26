@@ -1,5 +1,5 @@
-import { runAgentLoop } from "./run-loop";
-import { SONNET } from "../lib/anthropic";
+import { runFreeLoop } from "./free-loop";
+import { tierForAgent } from "./agent-tiers";
 import { AGENTS, AGENT_BY_ID, type AgentSpec } from "./registry";
 import { toolsFor } from "../tools/registry";
 import { writeMemory, recentMemory, logActivity } from "../lib/memory";
@@ -49,8 +49,11 @@ export async function runAgent(spec: AgentSpec): Promise<string> {
     const userMessage = `Your own findings currently OPEN and unresolved in the owner's inbox:\n${openList}\n\nDo not save a duplicate of any of these. If the evidence still supports one, that's fine and expected — it's already pending, leave it as-is. Only save something new if it's a genuinely distinct problem, or a material update to one of the above (say so explicitly if it's an update).\n\nOther agents' currently OPEN findings (for awareness only, titles/categories — not your job to act on these, but don't duplicate one or propose something that contradicts it without good reason):\n${crossList}\n\nYour own conclusions from your last few cycles (for continuity — build on this or note what's changed since, don't just re-run the same investigation from scratch):\n${recentList}\n\nRun your review now per your standard procedure.`;
 
     const cycleStart = new Date().toISOString();
-    const { text } = await runAgentLoop({
+    // Free-only path: the router picks an approved free model for this
+    // agent's tier (agents/agent-tiers.ts); no Anthropic call.
+    const { text } = await runFreeLoop({
       agent: spec.id,
+      tier: tierForAgent(spec.id),
       system: spec.system,
       userMessage,
       tools: toolsFor(spec.id),
@@ -59,8 +62,6 @@ export async function runAgent(spec: AgentSpec): Promise<string> {
       // "Reached max turns." with zero usable output, for the same spend as
       // a successful run. Paired with the wrap-up nudge in run-loop.ts.
       maxTurns: 16,
-      model: spec.model ?? SONNET, // per-agent override for low-stakes agents (see registry.ts)
-      effort: "high", // deep analysis before concluding, not a quick scan
     });
     await writeMemory(spec.id, text.slice(0, 500));
 

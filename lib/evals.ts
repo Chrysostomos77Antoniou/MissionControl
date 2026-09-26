@@ -1,6 +1,6 @@
-import { anthropic, HAIKU } from "./anthropic";
+import { freeLlm } from "./free-llm";
+import { GRADER_TIER } from "../agents/agent-tiers";
 import { supabaseAdmin } from "./supabase";
-import { recordUsage } from "./usage";
 import { logActivity } from "./memory";
 import type { AgentId, Suggestion } from "./types";
 
@@ -17,7 +17,7 @@ export interface AgentEval {
 const GRADER_SYSTEM = `You are a quick quality grader for an AI analyst agent's work cycle. Score this cycle's output from 1 (poor) to 5 (excellent) against these standards: (1) claims are backed by verified evidence, not just assertions, (2) findings are specific and actionable, not generic, (3) recommendations are right-sized for an early-stage app with a small user base, not enterprise-scale overengineering, (4) the cycle avoids duplicating an already-open finding. A cycle that correctly concludes "nothing new to report" after real investigation deserves a high score — do not penalize an agent for finding nothing when nothing is genuinely wrong. Reply in exactly this format on one line, nothing else: SCORE: <1-5> REASON: <one sentence>`;
 
 // Fire-and-forget grading for one agent's cycle — mirrors the shape of
-// reviewCycleConsensus in lib/consensus.ts: a single cheap Haiku call,
+// reviewCycleConsensus in lib/consensus.ts: a single cheap free-tier model call,
 // wrapped so a grading failure can never affect the cycle that triggered it.
 export async function gradeAgentRun(
   agent: AgentId,
@@ -37,18 +37,14 @@ export async function gradeAgentRun(
   let score: number;
   let reasoning: string;
   try {
-    const resp = await anthropic.messages.create({
-      model: HAIKU,
-      max_tokens: 150,
+    // Free-only router, "simple" tier (local model first); usage recorded by
+    // the router with cost 0.
+    const resp = await freeLlm.generate(GRADER_TIER, {
+      maxOutputTokens: 150,
       system: GRADER_SYSTEM,
       messages: [{ role: "user", content: userMessage }],
     });
-    await recordUsage(HAIKU, resp.usage);
-    const raw = resp.content
-      .filter((b): b is Extract<typeof resp.content[number], { type: "text" }> => b.type === "text")
-      .map((b) => b.text)
-      .join(" ")
-      .trim();
+    const raw = resp.text.trim();
     const match = raw.match(/SCORE:\s*([1-5])\s*REASON:\s*(.+)/i);
     if (!match) {
       // Silent otherwise — a missing grade would be indistinguishable from

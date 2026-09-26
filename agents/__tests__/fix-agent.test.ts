@@ -1,16 +1,15 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 type Dispatch = (a: string, n: string, i: Record<string, unknown>) => Promise<string>;
-let captured: { dispatch: Dispatch; system: string; tools: { name: string }[] } | null = null;
-vi.mock("../run-loop", () => ({
-  runAgentLoop: vi.fn(async (o: { dispatch: Dispatch; system: string; tools: { name: string }[] }) => { captured = o; return { text: "", toolOutputs: [] }; }),
+let captured: { dispatch: Dispatch; system: string; tools: { name: string }[]; tier: string } | null = null;
+vi.mock("../free-loop", () => ({
+  runFreeLoop: vi.fn(async (o: { dispatch: Dispatch; system: string; tools: { name: string }[]; tier: string }) => { captured = o; return { text: "", toolOutputs: [] }; }),
 }));
 const { commitToBranch, fileExistsOnBase } = vi.hoisted(() => ({ commitToBranch: vi.fn(), fileExistsOnBase: vi.fn() }));
 vi.mock("../../tools/github-ci", () => ({ commitToBranch: (...a: unknown[]) => commitToBranch(...a), fileExistsOnBase: (...a: unknown[]) => fileExistsOnBase(...a) }));
 vi.mock("../../tools/github-read", () => ({ listRepo: vi.fn(), readRepoFile: vi.fn() }));
 vi.mock("../../tools/web-search", () => ({ webSearch: vi.fn() }));
 vi.mock("../../tools/db-read", () => ({ dbRead: vi.fn() }));
-vi.mock("../../lib/anthropic", () => ({ OPUS: "m" }));
 
 import { runFixAgent } from "../fix-agent";
 import type { Suggestion } from "../../lib/types";
@@ -23,6 +22,11 @@ describe("fix agent: submit_fix safety", () => {
     commitToBranch.mockResolvedValue("Committed 1 file(s) to qa/x.");
     fileExistsOnBase.mockReset();
     await runFixAgent(s, "qa/x", null);
+  });
+
+  it("runs on the free loop at the HIGH tier (never the local 4B model), with the same five tools", () => {
+    expect(captured!.tier).toBe("high");
+    expect(captured!.tools.map((t) => t.name).sort()).toEqual(["db_read", "list_repo", "read_repo_file", "submit_fix", "web_search"]);
   });
 
   it("offers no SQL-execution tool and tells the model migrations are files only", () => {

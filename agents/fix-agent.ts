@@ -1,6 +1,5 @@
-import type Anthropic from "@anthropic-ai/sdk";
-import { runAgentLoop } from "./run-loop";
-import { OPUS } from "../lib/anthropic";
+import { runFreeLoop, type ToolDef } from "./free-loop";
+import { FIX_TIER } from "./agent-tiers";
 import { AGENT_BY_ID } from "./registry";
 import { webSearch } from "../tools/web-search";
 import { listRepo, readRepoFile } from "../tools/github-read";
@@ -9,7 +8,7 @@ import { commitToBranch, fileExistsOnBase } from "../tools/github-ci";
 import { validateFixFiles } from "../lib/fix-paths";
 import type { AgentId, Suggestion } from "../lib/types";
 
-const TOOLS: Anthropic.Tool[] = [
+const TOOLS: ToolDef[] = [
   {
     name: "list_repo",
     description: "List files/folders in the FootRank repo at a path (e.g. 'lib').",
@@ -112,14 +111,16 @@ If you cannot express this as a code or migration-file change (it needs a dashbo
     ? `Your previous fix for "${s.title}" FAILED the emulator test suite. Fix the failure and submit_fix again (full file contents). Test failure output:\n\n${failureContext}`
     : `Implement this suggestion as a code change, then submit_fix:\nTitle: ${s.title}\nDetails:\n${s.body}`;
 
-  const { text } = await runAgentLoop({
+  // "high" tier: strongest free Gemini model only, never the local 4B model.
+  // Authority is unchanged: the same five tools, submit_fix still commits
+  // only to the qa/* branch after path validation, and a human merges the PR.
+  const { text } = await runFreeLoop({
     agent: s.agent,
+    tier: FIX_TIER,
     system,
     userMessage,
     tools: TOOLS,
     maxTurns: 14,
-    model: OPUS, // code fixes / QA loop stay on Opus for correctness
-    effort: "medium", // balance correctness vs. cost (vs. the default high)
     dispatch,
   });
   return { text, committed };

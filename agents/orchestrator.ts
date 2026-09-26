@@ -1,9 +1,11 @@
-import Anthropic from "@anthropic-ai/sdk";
-import { anthropic, HAIKU } from "../lib/anthropic";
 import { AGENTS, AGENT_BY_ID } from "./registry";
 import { getOrchestratorBriefing } from "../lib/briefing";
-import { recordUsage } from "../lib/usage";
 import { logActivity } from "../lib/memory";
+import { freeLlm } from "../lib/free-llm";
+import type { LlmMessage } from "../lib/llm";
+import { FREE_AI_QUOTA_EXHAUSTED } from "../lib/llm-errors";
+import { CHAT_TIER } from "./agent-tiers";
+import { toToolSpec, type ToolDef } from "./free-loop";
 import { offeredToolNames, isToolOffered, rejectedToolMessage, SECURITY_TOOL_REJECTED } from "../lib/tool-guard";
 import { runGroup, runOne } from "./run-agent";
 import type { AgentId, Cadence } from "../lib/types";
@@ -34,63 +36,47 @@ function dispatch(scope: string): string {
   return `Unknown target "${scope}". Use "all", a cadence group (hourly / 4h / daily / 5day), or an agent id.`;
 }
 
-// A streaming chat that can also call tools. Uses the real Anthropic streaming
-// API so text reaches the client as it's generated (rather than blocking for a
-// full turn) — this both feels faster and avoids sitting blocked near the
-// platform's function-duration ceiling. Tool calls are resolved in a short
+// A streaming chat that can also call tools, on the free-only router
+// (CHAT_TIER = "simple": local Qwen first, Gemini Flash-Lite if Ollama is down;
+// never a paid provider). Text reaches the client as it's generated via the
+// provider-neutral onTextDelta callback. Tool calls are resolved in a short
 // loop (the handler returns a summary string) between streamed turns.
 function streamWithTools(
   system: string,
   userMessage: string,
-  tools: Anthropic.Tool[],
+  tools: ToolDef[],
   onTool: (name: string, input: unknown) => string,
 ): ReadableStream {
   const encoder = new TextEncoder();
+  const specs = tools.map(toToolSpec);
   return new ReadableStream({
     async start(controller) {
       try {
-        const messages: Anthropic.MessageParam[] = [
-          { role: "user", content: userMessage },
-        ];
+        const messages: LlmMessage[] = [{ role: "user", content: userMessage }];
         for (let turn = 0; turn < 4; turn++) {
-          const stream = anthropic.messages.stream({
-            model: HAIKU,
-            max_tokens: 1500,
+          const resp = await freeLlm.generate(CHAT_TIER, {
             system,
-            tools,
             messages,
+            tools: specs,
+            maxOutputTokens: 1500,
+            onTextDelta: (d) => controller.enqueue(encoder.encode(d)),
           });
-          for await (const event of stream) {
-            if (event.type === "content_block_delta" && event.delta.type === "text_delta") {
-              controller.enqueue(encoder.encode(event.delta.text));
+          if (resp.toolCalls.length === 0) break;
+          messages.push({ role: "assistant", content: resp.text, toolCalls: resp.toolCalls });
+          const offered = offeredToolNames(specs);
+          for (const call of resp.toolCalls) {
+            if (!isToolOffered(call.name, offered)) {
+              await logActivity("engineering", SECURITY_TOOL_REJECTED, `chat: ${String(call.name).slice(0, 80)}`).catch(() => {});
+              messages.push({ role: "tool", toolCallId: call.id, name: call.name, content: rejectedToolMessage(String(call.name)), isError: true });
+              continue;
             }
+            messages.push({ role: "tool", toolCallId: call.id, name: call.name, content: onTool(call.name, call.input) });
           }
-          const resp = await stream.finalMessage();
-          await recordUsage(HAIKU, resp.usage);
-          if (resp.stop_reason !== "tool_use") break;
-          messages.push({ role: "assistant", content: resp.content });
-          const offered = offeredToolNames(tools);
-          const results: Anthropic.ToolResultBlockParam[] = [];
-          for (const block of resp.content) {
-            if (block.type === "tool_use") {
-              if (!isToolOffered(block.name, offered)) {
-                await logActivity("engineering", SECURITY_TOOL_REJECTED, `chat: ${String(block.name).slice(0, 80)}`).catch(() => {});
-                results.push({ type: "tool_result", tool_use_id: block.id, content: rejectedToolMessage(String(block.name)), is_error: true });
-                continue;
-              }
-              results.push({
-                type: "tool_result",
-                tool_use_id: block.id,
-                content: onTool(block.name, block.input),
-              });
-            }
-          }
-          messages.push({ role: "user", content: results });
         }
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
-        const friendly = /credit balance/i.test(msg)
-          ? "⚠ Anthropic credit balance too low — add funds to use the agents."
+        const friendly = msg.startsWith(FREE_AI_QUOTA_EXHAUSTED)
+          ? "⚠ Free AI is unavailable right now (local model not running and no free cloud quota). Nothing was charged."
           : `⚠ Agent error: ${msg.slice(0, 200)}`;
         controller.enqueue(encoder.encode(friendly));
       } finally {
@@ -112,7 +98,7 @@ export async function streamAgentChat(
 You are in a private chat with the FootRank owner. Answer conversationally and concretely from your area of expertise. If the owner asks you to run, work, analyse, or produce suggestions NOW, call run_my_analysis (it runs in the background and posts to the inbox). Otherwise, just talk.
 
 ${PLAIN_TEXT_NOTE}`;
-  const tool: Anthropic.Tool = {
+  const tool: ToolDef = {
     name: "run_my_analysis",
     description:
       "Run your own full analysis now and save fresh suggestions to the owner's inbox. Use when the owner asks you to run / work / analyse / produce suggestions now.",
@@ -151,7 +137,7 @@ ${PLAIN_TEXT_NOTE}`;
 export async function streamChat(userMessage: string): Promise<ReadableStream> {
   const briefing = await getOrchestratorBriefing();
   const system = `${ORCH_SYSTEM}\n\n=== CURRENT TEAM STATE (live) ===\n${briefing}`;
-  const tool: Anthropic.Tool = {
+  const tool: ToolDef = {
     name: "run_agents",
     description:
       "Trigger specialist agents to run NOW and produce fresh suggestions in the owner's inbox. Use whenever the owner asks to run, dispatch, or kick off the team or a specific agent. 'scope' is: 'all' for every agent; a cadence group ('hourly', '4h', 'daily', '5day'); or a single agent id (cybersecurity, engineering, developer, qa, uxdesign, marketing, growth, data, community, competitive, monetization, devops).",

@@ -1,7 +1,7 @@
-import { anthropic, HAIKU } from "./anthropic";
+import { freeLlm } from "./free-llm";
+import { CONSENSUS_TIER } from "../agents/agent-tiers";
 import { supabaseAdmin } from "./supabase";
 import { logActivity } from "./memory";
-import { recordUsage } from "./usage";
 import type { AgentId } from "./types";
 
 // "Queen leads consensus" (the coordination pattern from ruvnet/ruflo's
@@ -11,7 +11,7 @@ import type { AgentId } from "./types";
 // issue in the same cycle can't see each other's fresh save and neither
 // catches the overlap (allOpenSuggestionsDigest only prevents duplicating
 // suggestions that existed BEFORE this cycle started). This runs once,
-// after the whole group finishes, as a single cheap Haiku pass over just
+// after the whole group finishes, as a single cheap free-tier model pass over just
 // the titles from that cycle — flagging (not auto-merging) anything that
 // looks duplicated or contradictory, for the owner to see in the log feed.
 export async function reviewCycleConsensus(agentIds: AgentId[], sinceIso: string): Promise<void> {
@@ -27,19 +27,15 @@ export async function reviewCycleConsensus(agentIds: AgentId[], sinceIso: string
   const list = fresh.map((s) => `- [${s.agent}] (${s.category ?? "general"}) ${s.title}`).join("\n");
   let text = "";
   try {
-    const resp = await anthropic.messages.create({
-      model: HAIKU,
-      max_tokens: 250,
+    // Free-only router, "simple" tier (local model first). Usage is recorded
+    // by the router with cost 0.
+    const resp = await freeLlm.generate(CONSENSUS_TIER, {
+      maxOutputTokens: 250,
       system:
         "You are a quick consistency reviewer. Given a list of findings different specialist agents just saved in the same run, say whether any TWO of them genuinely duplicate each other (same underlying issue) or contradict each other (recommend opposite actions). Reply with exactly 'NONE' if neither is true. Otherwise, one short sentence naming which two entries and why. Do not restate the whole list, do not comment on findings that are simply unrelated.",
       messages: [{ role: "user", content: list }],
     });
-    await recordUsage(HAIKU, resp.usage);
-    text = resp.content
-      .filter((b): b is Extract<typeof resp.content[number], { type: "text" }> => b.type === "text")
-      .map((b) => b.text)
-      .join(" ")
-      .trim();
+    text = resp.text.trim();
   } catch {
     return; // never let a consensus-check failure affect the cycle itself
   }
