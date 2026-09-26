@@ -49,13 +49,13 @@ Each agent runs its tool loop (`web_search`, `read_footrank_stats`, and for tech
 
 Each suggestion has three buttons:
 
-- **Okay — agent handles it** → the responsible agent executes the suggestion: opens a **GitHub PR** with the actual fix for code tasks, or applies a **Supabase migration directly** for DB/security fixes. If it can't finish autonomously, it reports exactly what you must do. The result is shown on the card. *Clicking Okay is your approval — that's the human gate before any change.*
-- **Mark done** → archive it (you handled it).
+- **Okay — agent handles it** → the responsible agent writes the change as code on a `qa/*` branch, which runs the emulator test suite. Database changes are written as a **new migration file** under `supabase/migrations/` — Mission Control has no way to execute SQL against the live database. If QA passes, Mission Control **opens a pull request**; you review it and merge it on GitHub yourself (normal CI + security scan run on the PR). After merging, apply any migration yourself. **Mission Control never merges and never runs migrations.** If the change can't be expressed as code, the agent reports exactly what you must do.
+- **Done** → archive it (you handled it).
 - **Dismiss** → drop it.
 
-**Setup for "Okay" to act:** `GITHUB_TOKEN` must have **write** access (for PRs) and `SUPABASE_DB_URL` must be set (Postgres connection URI, for DB migrations). Without them, Okay still runs the agent but it reports that it can't execute and tells you what to do manually. Strategy agents (Marketing, Growth, etc.) have no write tools — their "Okay" produces the concrete plan/deliverable.
+**Safety rails (enforced in code, see `lib/fix-paths.ts`, `lib/tool-guard.ts`, `lib/sql-guard.ts`):** a model can only run tools actually offered to it on that turn (anything else is rejected and logged as `security:tool-rejected`); fixes cannot modify `.github/`, secrets/signing files, or existing migrations; `db_read` runs one guarded SELECT through Supabase's read-only endpoint (`supabase_read_only_user`, read-only transaction), blocks the `auth`/`vault` schemas and personal/free-text columns, and redacts personal data in results.
 
-> ⚠️ Okay on a technical suggestion can change your live repo (a PR — you still merge) or your **live database** (a migration applied immediately, in a transaction). Review each suggestion before clicking Okay.
+**Setup for "Okay":** `GITHUB_TOKEN` needs Contents + Pull-requests write (to push the `qa/*` branch and open the PR). Recommended: protect `master` in GitHub (require a pull request and passing CI) so nothing — including this token — can push to it directly.
 
 ## Owner-only access
 

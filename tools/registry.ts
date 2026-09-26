@@ -4,8 +4,6 @@ import { webSearch } from "./web-search";
 import { readFootrankStats } from "./supabase-read";
 import { listRepo, readRepoFile } from "./github-read";
 import { dbRead } from "./db-read";
-import { openPr } from "./github-write";
-import { applyMigration } from "./db-migrate";
 import { saveSuggestion } from "../lib/suggestions";
 import { notify } from "../lib/notify";
 import { AGENT_BY_ID } from "../agents/registry";
@@ -16,8 +14,6 @@ type ToolName =
   | "list_repo"
   | "read_repo_file"
   | "save_suggestion"
-  | "open_github_pr"
-  | "apply_db_migration"
   | "db_read";
 
 const ALL_TOOLS: Record<ToolName, Anthropic.Tool> = {
@@ -36,7 +32,7 @@ const ALL_TOOLS: Record<ToolName, Anthropic.Tool> = {
   db_read: {
     name: "db_read",
     description:
-      "Run a READ-ONLY SQL query against the LIVE FootRank Supabase database to verify the real state — RLS policies (select * from pg_policies), tables/columns (information_schema.columns), storage buckets/policies (select * from storage.buckets), settings. ALWAYS use this to confirm whether something already exists before suggesting it; the repo does NOT contain the live database config. SELECT/WITH only.",
+      "Run ONE read-only SQL query (SELECT/WITH, executed as a read-only database role) against the LIVE FootRank Supabase database to verify the real state — RLS policies (select * from pg_policies), tables/columns (information_schema.columns), storage buckets (select * from storage.buckets), indexes, settings. ALWAYS use this to confirm whether something already exists before suggesting it; the repo does NOT contain the live database config. For app tables (public.*): use counts/aggregates and name non-personal columns explicitly — SELECT *, personal/free-text columns (names, emails, phones, tokens, messages…), the auth/vault schemas and non-built-in functions are rejected, and IDs are masked.",
     input_schema: { type: "object", properties: { sql: { type: "string" } }, required: ["sql"] },
   },
   list_repo: {
@@ -70,42 +66,6 @@ const ALL_TOOLS: Record<ToolName, Anthropic.Tool> = {
       required: ["category", "title", "body", "evidence", "priority"],
     },
   },
-  open_github_pr: {
-    name: "open_github_pr",
-    description:
-      "Open a pull request against the FootRank repo with the actual code fix. Read the relevant files first so your changes are correct and complete. Provide the full new content of each changed file.",
-    input_schema: {
-      type: "object",
-      properties: {
-        branch: { type: "string", description: "New branch name, e.g. 'mc/fix-rls-policy'." },
-        title: { type: "string" },
-        body: { type: "string", description: "PR description: what changed and why." },
-        files: {
-          type: "array",
-          description: "Files to create/update, each with the FULL new file content.",
-          items: {
-            type: "object",
-            properties: { path: { type: "string" }, content: { type: "string" } },
-            required: ["path", "content"],
-          },
-        },
-      },
-      required: ["branch", "title", "body", "files"],
-    },
-  },
-  apply_db_migration: {
-    name: "apply_db_migration",
-    description:
-      "Apply a SQL migration DIRECTLY to the live FootRank database. Use for security/data fixes (e.g. enabling RLS, adding a policy). Be careful and idempotent (use IF EXISTS / IF NOT EXISTS). Runs in a transaction.",
-    input_schema: {
-      type: "object",
-      properties: {
-        name: { type: "string", description: "Short migration name." },
-        sql: { type: "string", description: "The SQL to run." },
-      },
-      required: ["name", "sql"],
-    },
-  },
 };
 
 const BASE: ToolName[] = ["web_search", "read_footrank_stats", "db_read", "save_suggestion"];
@@ -119,20 +79,22 @@ export function toolsFor(agent: AgentId): Anthropic.Tool[] {
   return (isTechnical(agent) ? BASE_CODE : BASE).map((t) => ALL_TOOLS[t]);
 }
 
-// Handler toolset (when the owner clicks Okay). Adds write powers for technical
-// agents: open PRs and apply DB migrations. No save_suggestion — this is execution.
-export function handlerToolsFor(agent: AgentId): Anthropic.Tool[] {
-  const names: ToolName[] = isTechnical(agent)
-    ? ["web_search", "read_footrank_stats", "list_repo", "read_repo_file", "open_github_pr", "apply_db_migration"]
-    : ["web_search", "read_footrank_stats"];
-  return names.map((t) => ALL_TOOLS[t]);
-}
+// No write/execution toolset exists any more. Removed in the Phase 1 safety
+// pass: open_github_pr (handler-only, unreachable) and apply_db_migration
+// (ran arbitrary model-written SQL against the LIVE database). Code and DB
+// changes now go exclusively through lib/qa-loop.ts -> branch -> CI -> PR ->
+// human review and merge. Migrations are committed as files, never executed.
 
 export async function dispatchTool(
   agent: AgentId,
   name: string,
   input: Record<string, unknown>,
 ): Promise<string> {
+  // Defence in depth (the loop already enforces per-turn offering): never run
+  // a known tool for an agent whose toolset doesn't include it.
+  if (name in ALL_TOOLS && !toolsFor(agent).some((t) => t.name === name)) {
+    return `Rejected: tool "${name}" is not available to ${agent}.`;
+  }
   switch (name) {
     case "web_search":
       return webSearch(String(input.query));
@@ -162,10 +124,6 @@ export async function dispatchTool(
       }
       return "Saved to the owner's suggestions inbox.";
     }
-    case "open_github_pr":
-      return openPr(input as Parameters<typeof openPr>[0]);
-    case "apply_db_migration":
-      return applyMigration(String(input.sql));
     default:
       return `Unknown tool: ${name}`;
   }

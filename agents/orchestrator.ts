@@ -3,10 +3,12 @@ import { anthropic, HAIKU } from "../lib/anthropic";
 import { AGENTS, AGENT_BY_ID } from "./registry";
 import { getOrchestratorBriefing } from "../lib/briefing";
 import { recordUsage } from "../lib/usage";
-import { runGroup, runOne, runHandler } from "./run-agent";
+import { logActivity } from "../lib/memory";
+import { offeredToolNames, isToolOffered, rejectedToolMessage, SECURITY_TOOL_REJECTED } from "../lib/tool-guard";
+import { runGroup, runOne } from "./run-agent";
 import type { AgentId, Cadence } from "../lib/types";
 
-export { runGroup, runOne, runHandler };
+export { runGroup, runOne };
 
 const CADENCES: Cadence[] = ["hourly", "4h", "daily", "5day"];
 
@@ -67,9 +69,15 @@ function streamWithTools(
           await recordUsage(HAIKU, resp.usage);
           if (resp.stop_reason !== "tool_use") break;
           messages.push({ role: "assistant", content: resp.content });
+          const offered = offeredToolNames(tools);
           const results: Anthropic.ToolResultBlockParam[] = [];
           for (const block of resp.content) {
             if (block.type === "tool_use") {
+              if (!isToolOffered(block.name, offered)) {
+                await logActivity("engineering", SECURITY_TOOL_REJECTED, `chat: ${String(block.name).slice(0, 80)}`).catch(() => {});
+                results.push({ type: "tool_result", tool_use_id: block.id, content: rejectedToolMessage(String(block.name)), is_error: true });
+                continue;
+              }
               results.push({
                 type: "tool_result",
                 tool_use_id: block.id,

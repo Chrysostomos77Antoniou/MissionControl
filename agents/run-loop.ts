@@ -3,6 +3,7 @@ import { anthropic, OPUS, HAIKU } from "../lib/anthropic";
 import { dispatchTool } from "../tools/registry";
 import { recordUsage, flagApiError } from "../lib/usage";
 import { logActivity } from "../lib/memory";
+import { offeredToolNames, isToolOffered, rejectedToolMessage, SECURITY_TOOL_REJECTED } from "../lib/tool-guard";
 import type { AgentId } from "../lib/types";
 
 export interface LoopOutput {
@@ -84,9 +85,18 @@ export async function runAgentLoop(opts: {
 
     messages.push({ role: "assistant", content: response.content });
 
+    // Only tools offered on THIS turn may run (the final turn offers only
+    // save_suggestion). Anything else is refused, logged as a security
+    // event, and reported back to the model as an error — never dispatched.
+    const offered = offeredToolNames(turnTools);
     const toolResults: Anthropic.ToolResultBlockParam[] = [];
     for (const block of response.content) {
       if (block.type === "tool_use") {
+        if (!isToolOffered(block.name, offered)) {
+          await logActivity(agent, SECURITY_TOOL_REJECTED, `${String(block.name).slice(0, 80)} ${JSON.stringify(block.input ?? {}).slice(0, 200)}`);
+          toolResults.push({ type: "tool_result", tool_use_id: block.id, content: rejectedToolMessage(String(block.name)), is_error: true });
+          continue;
+        }
         await logActivity(agent, `tool:${block.name}`, JSON.stringify(block.input).slice(0, 300));
         const result = await dispatch(agent, block.name, block.input as Record<string, unknown>);
         toolOutputs.push(result);

@@ -4,7 +4,8 @@ import { goLive } from "../../../../../lib/qa-loop";
 
 export const maxDuration = 60;
 
-// "Push live" — merge the QA-passed branch into master and clear the task.
+// "I merged it" — verifies on GitHub that the OWNER merged the PR, then clears
+// the task. Mission Control never merges anything itself.
 export async function POST(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const s = await getSuggestion(id);

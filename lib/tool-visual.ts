@@ -10,8 +10,7 @@ export const TOOL_VISUAL: Record<string, { color: number; label: string }> = {
   list_repo: { color: 0xa855f7, label: "repo" },
   read_repo_file: { color: 0xa855f7, label: "repo" },
   save_suggestion: { color: 0x22c55e, label: "inbox" },
-  open_github_pr: { color: 0xf97316, label: "pr" },
-  apply_db_migration: { color: 0xef4444, label: "migrate" },
+  submit_fix: { color: 0xf97316, label: "pr" },
 };
 
 export const DEFAULT_TOOL_VISUAL = { color: 0xffaa00, label: "working" };

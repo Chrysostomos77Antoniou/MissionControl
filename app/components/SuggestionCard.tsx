@@ -17,6 +17,7 @@ export function SuggestionCard({ s, onResolve }: { s: Suggestion; onResolve: () 
   const [result, setResult] = useState<string | null>(s.result);
   const [qa, setQa] = useState<QaStatus>(s.qa_status);
   const [qaLog, setQaLog] = useState<string | null>(s.qa_log);
+  const [prUrl, setPrUrl] = useState<string | null>(s.pr_url);
   const [note, setNote] = useState("");
   const [diff, setDiff] = useState<{ filename: string; additions: number; deletions: number; patch: string }[] | null>(null);
   const [showDiff, setShowDiff] = useState(false);
@@ -34,11 +35,12 @@ export function SuggestionCard({ s, onResolve }: { s: Suggestion; onResolve: () 
     if (polling.current) return;
     polling.current = true;
     const res = await fetch(`/api/suggestions/${s.id}/qa-tick`, { method: "POST" });
-    const d = (await res.json().catch(() => null)) as { qa_status: QaStatus; qa_log?: string | null } | null;
+    const d = (await res.json().catch(() => null)) as { qa_status: QaStatus; qa_log?: string | null; pr_url?: string | null } | null;
     polling.current = false;
     if (!d) return;
     setQa(d.qa_status);
     if (d.qa_log) setQaLog(d.qa_log);
+    if (d.pr_url) setPrUrl(d.pr_url);
   }, [s.id]);
 
   // Poll while QA is running (testing/fixing).
@@ -80,7 +82,7 @@ export function SuggestionCard({ s, onResolve }: { s: Suggestion; onResolve: () 
     const d = (await res.json().catch(() => null)) as { ok: boolean; detail: string } | null;
     setBusy(null);
     if (d?.ok) onResolve();
-    else setNote(`⚠ ${d?.detail ?? "Push failed — try again."}`);
+    else setNote(`⚠ ${d?.detail ?? "Could not check the PR — try again."}`);
   };
 
   // An infrastructure failure (no credits, budget cap, API error) is NOT a real
@@ -90,7 +92,7 @@ export function SuggestionCard({ s, onResolve }: { s: Suggestion; onResolve: () 
   const banner = (() => {
     if (qa === "testing" || qa === "fixing")
       return { text: "🧪 QA TESTING ON EMULATOR…", bg: BLUE, fg: "#fff" };
-    if (qa === "passed") return { text: "✓ QA PASSED — READY TO PUSH LIVE", bg: GREEN, fg: "#000" };
+    if (qa === "passed") return { text: "✓ QA PASSED — PULL REQUEST READY FOR YOUR REVIEW", bg: GREEN, fg: "#000" };
     if (qa === "needs_owner" && couldntRun)
       return { text: "⚠ AGENT COULDN'T RUN — ADD CREDITS", bg: "#3a3a3a", fg: "#e7eaf0" };
     if (qa === "needs_owner") return { text: "⚠ ACTION NEEDED FROM YOU", bg: ORANGE, fg: "#000" };
@@ -175,13 +177,25 @@ export function SuggestionCard({ s, onResolve }: { s: Suggestion; onResolve: () 
           >
             {showDiff ? "▾ Hide diff" : "▸ View diff"}
           </button>
+          {prUrl && (
+            <a
+              href={prUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="px-4 py-1 mr-2 rounded text-xs font-semibold inline-block"
+              style={{ background: GREEN, color: "#000" }}
+            >
+              Review &amp; merge on GitHub ↗
+            </a>
+          )}
           <button
             onClick={pushLive}
             disabled={busy !== null}
-            className="px-4 py-1 rounded text-xs font-semibold"
-            style={{ background: GREEN, color: "#000" }}
+            className="px-3 py-1 rounded text-xs"
+            style={{ background: "var(--surface)", border: "1px solid var(--border)", color: "var(--text)" }}
+            title="Mission Control only checks whether you merged the PR; it never merges itself."
           >
-            {busy === "finalize" ? "Pushing live…" : "🚀 Push live (merge to master)"}
+            {busy === "finalize" ? "Checking…" : "I merged it — mark done"}
           </button>
           {showDiff && (
             <div className="mt-2 text-[10px] font-mono rounded p-2 max-h-72 overflow-y-auto" style={{ background: "#04070f", border: "1px solid var(--border)" }}>

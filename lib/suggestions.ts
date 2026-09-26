@@ -75,6 +75,7 @@ export async function updateQa(
     qa_log: string | null;
     result: string;
     outcome: "fixed" | "action_needed";
+    pr_url: string | null;
   }>,
 ): Promise<void> {
   await supabaseAdmin.from("suggestions").update(fields).eq("id", id);

@@ -5,7 +5,8 @@ import { AGENT_BY_ID } from "./registry";
 import { webSearch } from "../tools/web-search";
 import { listRepo, readRepoFile } from "../tools/github-read";
 import { dbRead } from "../tools/db-read";
-import { commitToBranch } from "../tools/github-ci";
+import { commitToBranch, fileExistsOnBase } from "../tools/github-ci";
+import { validateFixFiles } from "../lib/fix-paths";
 import type { AgentId, Suggestion } from "../lib/types";
 
 const TOOLS: Anthropic.Tool[] = [
@@ -27,13 +28,13 @@ const TOOLS: Anthropic.Tool[] = [
   {
     name: "db_read",
     description:
-      "READ-ONLY SQL against the live Supabase DB to verify real state (pg_policies, storage.buckets, information_schema) BEFORE writing a migration — so you never recreate a policy/table that already exists. SELECT/WITH only.",
+      "READ-ONLY, single-statement SQL (runs as a read-only database role) to verify real state (pg_catalog.pg_policies, storage.buckets, information_schema) BEFORE writing a migration — so you never recreate a policy/table that already exists. SELECT/WITH only. Personal columns (names, emails, phones, tokens…) and the auth/vault schemas are blocked; use counts/aggregates for user data.",
     input_schema: { type: "object", properties: { sql: { type: "string" } }, required: ["sql"] },
   },
   {
     name: "submit_fix",
     description:
-      "Submit the code fix. Provide the FULL new content of each changed file. This commits to the QA branch and runs the emulator test suite. Read the files first so your changes are complete and correct.",
+      "Submit the change. Provide the FULL new content of each changed file. This commits to a QA branch and runs the emulator test suite; if it passes, a pull request is opened for the OWNER to review and merge (nothing is merged or deployed automatically). Database changes must be a NEW file supabase/migrations/YYYYMMDDHHMMSS_name.sql — it is never executed by you or by Mission Control. .github/, secrets and signing files cannot be modified.",
     input_schema: {
       type: "object",
       properties: {
@@ -79,7 +80,17 @@ export async function runFixAgent(
       case "db_read":
         return dbRead(String(input.sql));
       case "submit_fix": {
-        const files = (input.files as { path: string; content: string }[]) ?? [];
+        const checked = validateFixFiles(input.files);
+        if (!checked.ok) return `Rejected — nothing committed:\n- ${checked.errors.join("\n- ")}`;
+        for (const m of checked.migrations) {
+          const exists = await fileExistsOnBase(m);
+          if (exists !== false) {
+            return exists === null
+              ? `Rejected — could not verify that ${m} is a new file (GitHub API error). Nothing committed.`
+              : `Rejected — ${m} already exists. Never edit an existing migration; add a new timestamped file instead. Nothing committed.`;
+          }
+        }
+        const files = checked.files;
         const res = await commitToBranch(branch, `mc: ${s.title.slice(0, 60)}`, files);
         if (res.startsWith("Committed")) committed = true;
         return res;
@@ -91,7 +102,11 @@ export async function runFixAgent(
 
   const system = `${spec.system}
 
-MODE: CODE FIX. Implement the change as actual code and submit_fix with the full new file contents. The fix is committed to a test branch and run against the FootRank emulator test suite — it must not break existing app flows. If you cannot express this as a code change (it needs a dashboard setting, a secret, or manual ops), do NOT submit_fix; instead explain exactly what the owner must do.`;
+MODE: CODE FIX. Implement the change as actual code and submit_fix with the full new file contents. The fix is committed to a test branch and run against the FootRank emulator test suite — it must not break existing app flows. If it passes, a pull request is opened and the OWNER reviews and merges it; nothing you do reaches production on its own.
+
+DATABASE CHANGES: you have no way to execute SQL against any database, and must not try. Express a schema/RLS/security change ONLY as a NEW migration file supabase/migrations/YYYYMMDDHHMMSS_short_snake_name.sql (UTC timestamp later than every existing migration; list_repo supabase/migrations first). Make it idempotent (IF EXISTS / IF NOT EXISTS, DROP POLICY IF EXISTS before CREATE POLICY) and never edit an existing migration. The owner applies it by hand after merging.
+
+If you cannot express this as a code or migration-file change (it needs a dashboard setting, a secret, or manual ops), do NOT submit_fix; instead explain exactly what the owner must do.`;
 
   const userMessage = failureContext
     ? `Your previous fix for "${s.title}" FAILED the emulator test suite. Fix the failure and submit_fix again (full file contents). Test failure output:\n\n${failureContext}`

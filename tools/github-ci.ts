@@ -1,6 +1,6 @@
 // GitHub plumbing for the async QA loop: commit a fix to a qa/* branch (which
-// auto-triggers the emulator workflow), read the run status/failure, then merge
-// to master on go-live. No pull requests are created.
+// auto-triggers the emulator workflow), read the run status/failure, then open
+// a pull request for human review. Mission Control never merges.
 const API = "https://api.github.com";
 
 function env() {
@@ -98,17 +98,56 @@ export async function runFailureSummary(runId: string): Promise<string> {
   return lines.join("\n").slice(-6000);
 }
 
-export async function mergeBranch(branch: string, base = "master"): Promise<{ ok: boolean; detail: string }> {
+// NOTE: there is deliberately NO merge function here any more (Phase 1
+// safety). Mission Control opens a pull request; only a human merges it.
+
+export async function fileExistsOnBase(path: string, base = "master"): Promise<boolean | null> {
+  const { repo, token } = env();
+  if (!repo || !token) return null;
+  const res = await fetch(`${API}/repos/${repo}/contents/${path.split("/").map(encodeURIComponent).join("/")}?ref=${encodeURIComponent(base)}`, { headers: h(token) });
+  if (res.status === 404) return false;
+  if (res.ok) return true;
+  return null; // unknown (API error) — callers must treat as "not safe"
+}
+
+// Open (or find the already-open) PR for a QA branch. Never merges.
+export async function openPullRequest(
+  branch: string,
+  title: string,
+  body: string,
+  base = "master",
+): Promise<{ ok: true; url: string } | { ok: false; detail: string }> {
   const { repo, token } = env();
   if (!repo || !token) return { ok: false, detail: "GITHUB_REPO / GITHUB_TOKEN not set." };
-  const res = await fetch(`${API}/repos/${repo}/merges`, {
+  const res = await fetch(`${API}/repos/${repo}/pulls`, {
     method: "POST",
     headers: h(token),
-    body: JSON.stringify({ base, head: branch, commit_message: `mc: merge ${branch} (QA passed)` }),
+    body: JSON.stringify({ title, head: branch, base, body, maintainer_can_modify: true }),
   });
-  if (res.status === 201) return { ok: true, detail: `Merged ${branch} into ${base}.` };
-  if (res.status === 204) return { ok: true, detail: `${base} already up to date.` };
-  return { ok: false, detail: `merge ${res.status}: ${(await res.text()).slice(0, 150)}` };
+  if (res.ok) return { ok: true, url: ((await res.json()) as { html_url: string }).html_url };
+  if (res.status === 422) {
+    const owner = repo.split("/")[0];
+    const list = await fetch(`${API}/repos/${repo}/pulls?state=open&head=${encodeURIComponent(`${owner}:${branch}`)}`, { headers: h(token) });
+    if (list.ok) {
+      const prs = (await list.json()) as { html_url: string }[];
+      if (prs[0]) return { ok: true, url: prs[0].html_url };
+    }
+  }
+  return { ok: false, detail: `open PR ${res.status}: ${(await res.text()).slice(0, 150)}` };
+}
+
+export async function pullRequestState(
+  prUrl: string,
+): Promise<{ state: "merged" | "open" | "closed" | "unknown"; detail: string }> {
+  const { repo, token } = env();
+  if (!repo || !token) return { state: "unknown", detail: "GITHUB_REPO / GITHUB_TOKEN not set." };
+  const m = prUrl.match(/\/pull\/(\d+)/);
+  if (!m) return { state: "unknown", detail: `Could not parse PR number from ${prUrl}` };
+  const res = await fetch(`${API}/repos/${repo}/pulls/${m[1]}`, { headers: h(token) });
+  if (!res.ok) return { state: "unknown", detail: `GitHub PR ${res.status}` };
+  const pr = (await res.json()) as { merged: boolean; state: string };
+  if (pr.merged) return { state: "merged", detail: "PR merged." };
+  return pr.state === "open" ? { state: "open", detail: "PR is open." } : { state: "closed", detail: "PR was closed without merging." };
 }
 
 export interface DiffFile {
