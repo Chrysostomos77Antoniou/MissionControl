@@ -6,6 +6,7 @@ import { listRepo, readRepoFile } from "./github-read";
 import { dbRead } from "./db-read";
 import { saveSuggestion } from "../lib/suggestions";
 import { notify } from "../lib/notify";
+import { normalizeCategory } from "../lib/suggestion-category";
 import { AGENT_BY_ID } from "../agents/registry";
 
 type ToolName =
@@ -88,8 +89,15 @@ export function toolsFor(agent: AgentId): Anthropic.Tool[] {
 // Loop-supplied context for a tool call. Never derived from model output, so
 // the model cannot set it. Used by the free loop's claim guard.
 export interface DispatchContext {
-  notify?: boolean; // false = do not send the high-priority Telegram alert
+  guardPassed?: boolean; // true only when the claim guard verified every figure
+  notify?: boolean; // false = never send the high-priority Telegram alert
   appendix?: string; // appended to a saved suggestion's body (unverified note + provenance)
+}
+
+// Fail-closed alert rule: a high-priority suggestion alerts ONLY with explicit
+// claim-guard approval. Missing context (e.g. a legacy caller) never alerts.
+export function shouldAlert(priority: string, ctx?: DispatchContext): boolean {
+  return priority === "high" && ctx?.guardPassed === true && ctx.notify !== false;
 }
 
 export async function dispatchTool(
@@ -123,14 +131,14 @@ export async function dispatchTool(
       const body = ctx?.appendix ? `${withEvidence}\n\n${ctx.appendix}` : withEvidence;
       await saveSuggestion({
         agent,
-        category: String(input.category ?? "general"),
+        category: normalizeCategory(input.category).category,
         title: String(input.title),
         body,
         priority,
       });
       // Suggestions with unverified figures are still saved for human review,
       // but never push an immediate alert.
-      if (priority === "high" && ctx?.notify !== false) {
+      if (shouldAlert(priority, ctx)) {
         await notify(`🔴 ${AGENT_BY_ID[agent]?.name ?? agent} flagged (high): ${String(input.title)}`);
       }
       return "Saved to the owner's suggestions inbox.";

@@ -13,15 +13,30 @@ import { suggestionsSince } from "../lib/suggestions";
 import { gradeAgentRun } from "../lib/evals";
 import type { AgentId, Cadence, Suggestion } from "../lib/types";
 
+// Status logging must never change the outcome of a run.
+async function safeLog(agent: AgentId, action: string, detail: string): Promise<void> {
+  try {
+    await logActivity(agent, action, detail);
+  } catch {
+    // ignored
+  }
+}
+
 export async function runAgent(spec: AgentSpec): Promise<string> {
   // Guards against the SAME agent's cycle running twice concurrently (a
   // double-fired cron, or a manual "Run" overlapping a scheduled cycle
   // already in flight for it) — that would double the API spend for no
   // benefit and race on writing suggestions/memory for this agent.
-  const locked = await acquireAgentLock(spec.id);
-  if (!locked) {
+  const lock = await acquireAgentLock(spec.id);
+  if (lock.status === "held") {
     await logActivity(spec.id, "cycle:skipped-overlap", "Already running — skipped to avoid a duplicate concurrent run.");
     return "Skipped — already running.";
+  }
+  if (lock.status === "error") {
+    // Not contention: the lock could not be checked (e.g. database down).
+    // Nothing runs without a verified lock.
+    await safeLog(spec.id, "cycle:lock-error", lock.detail);
+    return `⚠ Skipped — could not verify the run lock (${lock.detail}). Nothing was run.`;
   }
   try {
     // The real, accurate signal for what's still unresolved — not a fuzzy
@@ -52,7 +67,7 @@ export async function runAgent(spec: AgentSpec): Promise<string> {
     const cycleStart = new Date().toISOString();
     // Free-only path: the router picks an approved free model for this
     // agent's tier (agents/agent-tiers.ts); no Anthropic call.
-    const { text, toolOutputs } = await runFreeLoop({
+    const { text, toolOutputs, status, detail } = await runFreeLoop({
       agent: spec.id,
       tier: tierForAgent(spec.id),
       system: spec.system,
@@ -64,11 +79,18 @@ export async function runAgent(spec: AgentSpec): Promise<string> {
       // a successful run. Paired with the wrap-up nudge in run-loop.ts.
       maxTurns: 16,
     });
+    // Memory is written only for a natural conclusion ("ok"). A stopped run
+    // (no free AI, deadline, failed write tool) or a maxed-out run has no
+    // trustworthy conclusion, and its status text must never be replayed to
+    // future cycles as "your own conclusions".
     // Figures not found in (or derivable from) this cycle's data are marked
-    // [unverified] before they can be replayed to future cycles as "your own
-    // conclusions". Verified summaries are stored unchanged.
-    const memory = guardSummary(text, { data: toolOutputs, context: [userMessage, spec.system] });
-    await writeMemory(spec.id, memory.text.slice(0, 500));
+    // [unverified] before they can be replayed. Verified summaries are stored unchanged.
+    if (status === "ok") {
+      const memory = guardSummary(text, { data: toolOutputs, context: [userMessage, spec.system] });
+      await writeMemory(spec.id, memory.text.slice(0, 500));
+    } else {
+      await safeLog(spec.id, "memory:skipped", `loop ${status}${detail ? ` (${detail})` : ""}`);
+    }
 
     // Never let a grading failure affect the cycle that triggered it —
     // same non-blocking pattern as alertIfCredentialsBroken/reviewCycleConsensus above.
@@ -80,7 +102,9 @@ export async function runAgent(spec: AgentSpec): Promise<string> {
 
     return text;
   } finally {
-    await releaseAgentLock(spec.id);
+    // Owner-token release: a no-op if this run's lock expired and was taken over.
+    const released = await releaseAgentLock(spec.id, lock.token);
+    if (!released) await safeLog(spec.id, "lock:not-released", "lock expired, taken over, or delete failed");
   }
 }
 
