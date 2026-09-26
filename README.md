@@ -32,16 +32,23 @@ Next.js 15 (App Router) · TypeScript · `@anthropic-ai/sdk` (`claude-opus-4-8`)
 
 - `npm run dev` — dashboard at http://localhost:3000 (agent roster + suggestions inbox + live feed + orchestrator chat)
 - `npm test` — unit tests
-- Trigger a cadence group manually:
-  ```bash
-  curl -X POST "http://localhost:3000/api/cycle?group=daily" -H "Authorization: Bearer $CRON_SECRET"
-  # groups: hourly | 4h | daily | 5day
+- Trigger one cycle by hand (same endpoint the scheduler uses):
+  ```powershell
+  powershell -File tools\schedule-cycle.ps1 -Group daily   # 4h | daily | 5day
   ```
 - Run QA on demand: the **▶ Run QA** button on the dashboard (or `POST /api/qa`).
 
-## Cron (Vercel)
+## Scheduled cycles (local only)
 
-`vercel.json` schedules the four cadence groups. **Sub-daily crons (hourly, 4h) require a Vercel Pro plan** — on Hobby, only the daily/5-day schedules fire; trigger the others manually or with an external scheduler.
+Mission Control runs **only on this machine**; nothing in the cloud can reach it, so there is no Vercel/GitHub cron.
+
+- **Trigger:** Windows Task Scheduler runs `tools/schedule-cycle.ps1 -Group 4h|daily|5day`, which POSTs to `http://127.0.0.1:3000/api/cycle`. You register the tasks yourself once (commands are in the script's header). The app must be running (`npm run dev` / `npm start`) or the cycle is simply missed.
+- **Auth:** `/api/cycle` requires `Authorization: Bearer <CRON_SECRET>`. If `CRON_SECRET` is missing or empty the endpoint rejects everything. The script reads the secret from `MC_CRON_SECRET` or `.env.local` and never prints it.
+- **One at a time:** a cycle takes a cycle lock (a second cycle is skipped, not queued) and runs due agents sequentially.
+- **Change detection:** before each due agent, a deterministic fingerprint of its inputs is compared with its last successful baseline (stored as `cycle:baseline` rows in `activity_log`): the agent's own open suggestions (all agents) plus all-time FootRank totals — users, matches, teams, behavior reports, notifications (growth, marketing, community, devops). Unchanged → skipped with **no AI call**.
+- **7-day maximum age:** an agent whose last successful run is 7+ days old runs even if nothing changed.
+- **First run / failures:** no baseline → the agent runs. A baseline is written only after a successful (`ok`) run; a stopped, maxed-out or failed run keeps the old one. If an input can't be read the agent is skipped (never treated as "unchanged"). If free AI is unavailable for a tier, later agents on that tier are not started.
+- **Manual runs** (dashboard buttons, chat "run …") skip change detection only — they still use the cycle and agent locks, one agent at a time, free-only models, the numeric-claim guard, and human approval for any fix.
 
 ## How suggestions flow
 

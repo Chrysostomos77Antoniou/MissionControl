@@ -3,7 +3,7 @@ import type { LlmRequest } from "../../lib/llm";
 
 const { generate, runGroup, runOne, logActivity } = vi.hoisted(() => ({ generate: vi.fn(), runGroup: vi.fn(), runOne: vi.fn(), logActivity: vi.fn() }));
 vi.mock("../../lib/free-llm", () => ({ freeLlm: { generate } }));
-vi.mock("../run-agent", () => ({ runGroup, runOne }));
+vi.mock("../cycle", () => ({ runGroup, runOne }));
 vi.mock("../../lib/briefing", () => ({ getOrchestratorBriefing: vi.fn().mockResolvedValue("AGENT STATUS: all idle") }));
 vi.mock("../../lib/memory", () => ({ logActivity: (...a: unknown[]) => logActivity(...a) }));
 vi.mock("../../lib/anthropic", () => {
@@ -75,5 +75,34 @@ describe("15. orchestrator chat on the free router", () => {
     generate.mockResolvedValue(resp("", [{ name: "run_agents", input: { scope: "nope" } }]));
     await read(await streamChat("loop forever"));
     expect(generate).toHaveBeenCalledTimes(4);
+  });
+});
+
+describe("6b. chat dispatch goes through the sequential cycle runner", () => {
+  it('"all" is ONE sequential manual run, not parallel cadence groups', async () => {
+    generate.mockResolvedValueOnce(resp("", [{ name: "run_agents", input: { scope: "all" } }])).mockResolvedValueOnce(resp("ok"));
+    await read(await streamChat("run everyone"));
+    expect(runGroup).toHaveBeenCalledTimes(1);
+    expect(runGroup).toHaveBeenCalledWith("all");
+  });
+
+  it("a cadence group is one manual group run", async () => {
+    generate.mockResolvedValueOnce(resp("", [{ name: "run_agents", input: { scope: "daily" } }])).mockResolvedValueOnce(resp("ok"));
+    await read(await streamChat("run daily"));
+    expect(runGroup).toHaveBeenCalledWith("daily");
+  });
+
+  it("run_my_analysis runs the agent through the cycle runner", async () => {
+    generate.mockResolvedValueOnce(resp("", [{ name: "run_my_analysis" }])).mockResolvedValueOnce(resp("ok"));
+    await read(await streamAgentChat("growth", "run your analysis now"));
+    expect(runOne).toHaveBeenCalledWith("growth");
+  });
+
+  it("orchestrator imports its runners from agents/cycle, not run-agent", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const src = readFileSync(join(__dirname, "..", "orchestrator.ts"), "utf8");
+    expect(src).toMatch(/from "\.\/cycle"/);
+    expect(src).not.toMatch(/from "\.\/run-agent"/);
   });
 });

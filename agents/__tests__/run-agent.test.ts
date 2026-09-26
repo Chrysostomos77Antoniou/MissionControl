@@ -29,10 +29,13 @@ vi.mock("../run-loop", () => {
   throw new Error("the migrated agent path must not load the legacy Anthropic loop");
 });
 
-import { runOne } from "../run-agent";
+import { runAgent, runAgentDetailed } from "../run-agent";
 import { AGENTS, AGENT_BY_ID } from "../registry";
+import type { AgentId } from "../../lib/types";
 import { AGENT_TIER } from "../agent-tiers";
 import { toolsFor } from "../../tools/registry";
+
+const runOne = (id: AgentId) => runAgent(AGENT_BY_ID[id]);
 
 beforeEach(() => {
   runFreeLoop.mockReset();
@@ -133,6 +136,39 @@ describe("run-agent on the free loop", () => {
       releaseAgentLock.mockResolvedValue(false);
       await runOne("growth");
       expect(logActivity).toHaveBeenCalledWith("growth", "lock:not-released", expect.any(String));
+    });
+  });
+
+  describe("run result + grader (6b)", () => {
+    it("runAgentDetailed reports the loop outcome and stop reason", async () => {
+      runFreeLoop.mockResolvedValue({ text: "⚠ Agent error: free AI unavailable — x", toolOutputs: [], status: "stopped", detail: "free-ai-unavailable" });
+      expect(await runAgentDetailed(AGENT_BY_ID.growth)).toEqual({ outcome: "stopped", text: "⚠ Agent error: free AI unavailable — x", detail: "free-ai-unavailable" });
+      runFreeLoop.mockResolvedValue({ text: "done", toolOutputs: [], status: "ok" });
+      expect(await runAgentDetailed(AGENT_BY_ID.growth)).toEqual({ outcome: "ok", text: "done" });
+    });
+
+    it("lock contention and lock errors are distinct outcomes", async () => {
+      acquireAgentLock.mockResolvedValue({ status: "held" });
+      expect((await runAgentDetailed(AGENT_BY_ID.growth)).outcome).toBe("skipped-overlap");
+      acquireAgentLock.mockResolvedValue({ status: "error", detail: "db down" });
+      expect(await runAgentDetailed(AGENT_BY_ID.growth)).toMatchObject({ outcome: "lock-error", detail: "db down" });
+    });
+
+    it("a stopped run is not graded (no extra LLM call right after the providers failed)", async () => {
+      runFreeLoop.mockResolvedValue({ text: "x", toolOutputs: [], status: "stopped", detail: "free-ai-unavailable" });
+      await runOne("growth");
+      expect(gradeAgentRun).not.toHaveBeenCalled();
+    });
+
+    it.each(["ok", "max_turns"])("a %s run is still graded", async (status) => {
+      runFreeLoop.mockResolvedValue({ text: "x", toolOutputs: [], status });
+      await runOne("growth");
+      expect(gradeAgentRun).toHaveBeenCalledTimes(1);
+    });
+
+    it("run-agent no longer exports group/single runners (all runs go through agents/cycle.ts)", async () => {
+      const mod = await import("../run-agent");
+      expect(Object.keys(mod).sort()).toEqual(["runAgent", "runAgentDetailed"]);
     });
   });
 });

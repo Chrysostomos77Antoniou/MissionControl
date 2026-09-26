@@ -1,17 +1,14 @@
 import { runFreeLoop } from "./free-loop";
 import { tierForAgent } from "./agent-tiers";
 import { guardSummary } from "../lib/claim-guard";
-import { AGENTS, AGENT_BY_ID, type AgentSpec } from "./registry";
+import type { AgentSpec } from "./registry";
 import { toolsFor } from "../tools/registry";
 import { writeMemory, recentMemory, logActivity } from "../lib/memory";
 import { openSuggestionsForAgent, allOpenSuggestionsDigest } from "../lib/suggestions";
-import { withinBudget } from "../lib/usage";
 import { acquireAgentLock, releaseAgentLock } from "../lib/lock";
-import { alertIfCredentialsBroken } from "../lib/health";
-import { reviewCycleConsensus } from "../lib/consensus";
 import { suggestionsSince } from "../lib/suggestions";
 import { gradeAgentRun } from "../lib/evals";
-import type { AgentId, Cadence, Suggestion } from "../lib/types";
+import type { AgentId, Suggestion } from "../lib/types";
 
 // Status logging must never change the outcome of a run.
 async function safeLog(agent: AgentId, action: string, detail: string): Promise<void> {
@@ -22,7 +19,22 @@ async function safeLog(agent: AgentId, action: string, detail: string): Promise<
   }
 }
 
+// The outcome the cycle runner (agents/cycle.ts) uses to decide whether a
+// change-detection baseline may be written: only "ok" counts as success.
+export type AgentOutcome = "ok" | "stopped" | "max_turns" | "skipped-overlap" | "lock-error";
+export interface AgentRunResult {
+  outcome: AgentOutcome;
+  text: string;
+  detail?: string; // loop stop reason / lock error; never model output
+}
+
+// Runs ONE agent once. Callers outside this module must go through
+// agents/cycle.ts (cycle lock, one agent at a time), never call this directly.
 export async function runAgent(spec: AgentSpec): Promise<string> {
+  return (await runAgentDetailed(spec)).text;
+}
+
+export async function runAgentDetailed(spec: AgentSpec): Promise<AgentRunResult> {
   // Guards against the SAME agent's cycle running twice concurrently (a
   // double-fired cron, or a manual "Run" overlapping a scheduled cycle
   // already in flight for it) — that would double the API spend for no
@@ -30,13 +42,13 @@ export async function runAgent(spec: AgentSpec): Promise<string> {
   const lock = await acquireAgentLock(spec.id);
   if (lock.status === "held") {
     await logActivity(spec.id, "cycle:skipped-overlap", "Already running — skipped to avoid a duplicate concurrent run.");
-    return "Skipped — already running.";
+    return { outcome: "skipped-overlap", text: "Skipped — already running." };
   }
   if (lock.status === "error") {
     // Not contention: the lock could not be checked (e.g. database down).
     // Nothing runs without a verified lock.
     await safeLog(spec.id, "cycle:lock-error", lock.detail);
-    return `⚠ Skipped — could not verify the run lock (${lock.detail}). Nothing was run.`;
+    return { outcome: "lock-error", text: `⚠ Skipped — could not verify the run lock (${lock.detail}). Nothing was run.`, detail: lock.detail };
   }
   try {
     // The real, accurate signal for what's still unresolved — not a fuzzy
@@ -97,10 +109,15 @@ export async function runAgent(spec: AgentSpec): Promise<string> {
     // suggestionsSince itself is guarded too: a transient fetch failure here
     // must not surface as a failed cycle when the agent's actual work (memory
     // write, any suggestions already saved) already succeeded.
-    const saved = await suggestionsSince(spec.id, cycleStart).catch(() => [] as Suggestion[]);
-    await gradeAgentRun(spec.id, cycleStart, text, saved, open).catch(() => {});
+    // A "stopped" run (no free AI, deadline, failed write tool) produced no
+    // conclusion to grade, and grading it would be one more LLM call right
+    // after the providers failed — skip it. ok / max_turns are still graded.
+    if (status !== "stopped") {
+      const saved = await suggestionsSince(spec.id, cycleStart).catch(() => [] as Suggestion[]);
+      await gradeAgentRun(spec.id, cycleStart, text, saved, open).catch(() => {});
+    }
 
-    return text;
+    return { outcome: status, text, ...(detail ? { detail } : {}) };
   } finally {
     // Owner-token release: a no-op if this run's lock expired and was taken over.
     const released = await releaseAgentLock(spec.id, lock.token);
@@ -108,36 +125,8 @@ export async function runAgent(spec: AgentSpec): Promise<string> {
   }
 }
 
-export async function runGroup(cadence: Cadence): Promise<Record<string, string>> {
-  const budget = await withinBudget();
-  if (!budget.ok) {
-    await logActivity("engineering", "cycle:skipped", budget.detail);
-    return { skipped: budget.detail };
-  }
-  // Cheap (2 HTTP calls, no LLM spend) — catch a dead GitHub/Supabase token
-  // before an agent silently eats a turn on failing tool calls. Never let a
-  // hiccup in the check itself block the actual cycle from running.
-  await alertIfCredentialsBroken().catch(() => {});
-  const due = AGENTS.filter((a) => a.cadence === cadence);
-  const cycleStart = new Date().toISOString();
-  await logActivity(due[0]?.id ?? "engineering", "cycle:start", `Running ${cadence} group (${due.length} agents).`);
-  const results = await Promise.allSettled(due.map((a) => runAgent(a)));
-  const out: Record<string, string> = {};
-  due.forEach((a, i) => {
-    const r = results[i];
-    out[a.id] = r.status === "fulfilled" ? r.value : `Error: ${r.reason}`;
-  });
-  // Each agent only sees suggestions that existed BEFORE this cycle started
-  // (see allOpenSuggestionsDigest) — two agents that independently land on
-  // the same new finding in this same parallel batch can't catch that
-  // overlap themselves. One cheap pass over just this cycle's titles does.
-  await reviewCycleConsensus(due.map((a) => a.id), cycleStart).catch(() => {});
-  return out;
-}
-
-export async function runOne(id: AgentId): Promise<string> {
-  return runAgent(AGENT_BY_ID[id]);
-}
+// Group runs, single-agent runs and scheduled cycles live in agents/cycle.ts
+// (cycle lock + one agent at a time + change detection for scheduled runs).
 
 // The former runHandler ("Okay" executes via open_github_pr / apply_db_migration)
 // was removed in the Phase 1 safety pass: it was unreachable from any route,

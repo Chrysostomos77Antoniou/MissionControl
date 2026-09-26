@@ -30,3 +30,24 @@ export async function readFootrankStats(): Promise<string> {
     line("Notifications sent (7d)", notif7d),
   ].join("\n");
 }
+
+// All-time totals for deterministic change detection (agents/cycle.ts).
+// Unlike readFootrankStats, no rolling windows (those change as time
+// passes). null if ANY count could not be read — never a partial result.
+export async function readFootrankTotals(): Promise<{
+  users: number;
+  matches: number;
+  teams: number;
+  behavior_reports: number;
+  notifications: number;
+} | null> {
+  const [users, matches, teams, behavior_reports, notifications] = await Promise.all([
+    countSince("users"),
+    countSince("matches"),
+    countSince("teams"),
+    countSince("behavior_reports"),
+    countSince("notifications"),
+  ]);
+  if ([users, matches, teams, behavior_reports, notifications].some((n) => n === null)) return null;
+  return { users: users!, matches: matches!, teams: teams!, behavior_reports: behavior_reports!, notifications: notifications! };
+}

@@ -1,27 +1,29 @@
 import { NextRequest, NextResponse } from "next/server";
-import { runGroup, runOne } from "../../../agents/orchestrator";
+import { runScheduledCycle, runManual, SCHEDULED_GROUPS, type ScheduledGroup } from "../../../agents/cycle";
 import { AGENT_BY_ID } from "../../../agents/registry";
-import type { Cadence } from "../../../lib/types";
+import { isCronAuthorized } from "../../../lib/cron-auth";
+import type { AgentId } from "../../../lib/types";
 
 export const maxDuration = 300;
 
-const VALID: Cadence[] = ["hourly", "4h", "daily", "5day"];
-
+// Local scheduler endpoint (Windows Task Scheduler -> this app on 127.0.0.1 port 3000,
+// see tools/schedule-cycle.ps1). Fails closed without CRON_SECRET.
+//   ?group=4h|daily|5day|hourly  -> unattended cycle WITH change detection
+//   ?group=<agent id>            -> explicit single-agent run (no detection)
+// Either way: cycle lock, one agent at a time, free-only models, claim guard.
+// The response carries outcomes only — no secrets, keys or model output.
 export async function POST(req: NextRequest) {
-  const auth = req.headers.get("authorization");
-  if (auth !== `Bearer ${process.env.CRON_SECRET}`) {
+  if (!isCronAuthorized(req.headers.get("authorization"), process.env.CRON_SECRET)) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
   const group = req.nextUrl.searchParams.get("group") ?? "4h";
-  // Also accept a single agent id (e.g. ?group=marketing) — useful for
-  // targeted manual re-runs without re-billing a whole cadence group.
   if (group in AGENT_BY_ID) {
-    const result = await runOne(group as keyof typeof AGENT_BY_ID);
-    return NextResponse.json({ agent: group, result });
+    const r = await runManual([group as AgentId]);
+    return NextResponse.json({ ...r, agents: r.agents.map((e) => ({ agent: e.agent, outcome: e.outcome, ...(e.reason ? { reason: e.reason } : {}) })) });
   }
-  if (!VALID.includes(group as Cadence)) {
-    return NextResponse.json({ error: `invalid group "${group}"` }, { status: 400 });
+  if (!SCHEDULED_GROUPS.includes(group as ScheduledGroup)) {
+    return NextResponse.json({ error: "invalid group" }, { status: 400 });
   }
-  const result = await runGroup(group as Cadence);
-  return NextResponse.json({ group, result });
+  const r = await runScheduledCycle(group as ScheduledGroup);
+  return NextResponse.json(r);
 }

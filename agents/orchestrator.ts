@@ -7,7 +7,7 @@ import { FREE_AI_QUOTA_EXHAUSTED } from "../lib/llm-errors";
 import { CHAT_TIER } from "./agent-tiers";
 import { toToolSpec, type ToolDef } from "./free-loop";
 import { offeredToolNames, isToolOffered, rejectedToolMessage, SECURITY_TOOL_REJECTED } from "../lib/tool-guard";
-import { runGroup, runOne } from "./run-agent";
+import { runGroup, runOne } from "./cycle";
 import type { AgentId, Cadence } from "../lib/types";
 
 export { runGroup, runOne };
@@ -17,11 +17,15 @@ const CADENCES: Cadence[] = ["hourly", "4h", "daily", "5day"];
 // Fire agent runs WITHOUT blocking the chat (a run takes minutes); the owner
 // watches results land in the inbox. Errors are swallowed so a failed background
 // run can never crash the chat request.
+// An explicit request from the owner bypasses change detection only: every run
+// goes through agents/cycle.ts (cycle lock, ONE agent at a time, agent lock,
+// free-only loop, claim guard). "all" is a single sequential run, never
+// parallel groups.
 function dispatch(scope: string): string {
   const s = (scope || "all").trim().toLowerCase();
   if (s === "all" || s === "everyone" || s === "team" || s === "everybody") {
-    for (const c of CADENCES) runGroup(c).catch(() => {});
-    return `Dispatched all ${AGENTS.length} agents. Fresh suggestions will appear in the inbox over the next few minutes.`;
+    runGroup("all").catch(() => {});
+    return `Dispatched all ${AGENTS.filter((a) => a.cadence !== "ondemand").length} scheduled agents, one at a time (skipped if another run is already in progress). Fresh suggestions will appear in the inbox as each finishes.`;
   }
   if (CADENCES.includes(s as Cadence)) {
     runGroup(s as Cadence).catch(() => {});

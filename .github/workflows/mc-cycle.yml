@@ -1,13 +1,11 @@
 name: Mission Control cycle trigger
 
+# Mission Control runs locally only, so a GitHub-hosted runner cannot reach it.
+# Scheduled cycles now come from Windows Task Scheduler on the owner's machine
+# (tools/schedule-cycle.ps1 -> http://127.0.0.1:3000/api/cycle). The former
+# `schedule:` trigger was removed; only a manual dispatch remains, and it is
+# only useful if MC_BASE_URL points at a reachable instance.
 on:
-  schedule:
-    # 4h cadence agents (cybersecurity, engineering, developer)
-    - cron: "0 */4 * * *"
-    # daily cadence agents (qa, uxdesign, marketing, data, community, competitive, copywriter)
-    - cron: "0 9 * * *"
-    # 5day cadence agent (growth)
-    - cron: "0 10 */5 * *"
   workflow_dispatch:
     inputs:
       group:
@@ -25,12 +23,7 @@ jobs:
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             echo "group=${{ inputs.group }}" >> "$GITHUB_OUTPUT"
           else
-            case "${{ github.event.schedule }}" in
-              "0 */4 * * *") echo "group=4h" >> "$GITHUB_OUTPUT" ;;
-              "0 9 * * *") echo "group=daily" >> "$GITHUB_OUTPUT" ;;
-              "0 10 */5 * *") echo "group=5day" >> "$GITHUB_OUTPUT" ;;
-              *) echo "unrecognized schedule: ${{ github.event.schedule }}" >&2; exit 1 ;;
-            esac
+            echo "no scheduled trigger: run Mission Control cycles locally" >&2; exit 1
           fi
 
       - name: Call Mission Control cycle endpoint
