@@ -44,6 +44,9 @@ import { AGENTS, AGENT_BY_ID } from "../registry";
 import type { AgentId } from "../../lib/types";
 import { AGENT_TIER } from "../agent-tiers";
 import { toolsFor } from "../../tools/registry";
+import { EvidenceLedger } from "../../lib/evidence-ledger";
+import { buildScope, scopeLine, detectOverclaim } from "../../lib/investigation-scope";
+import { readOut, searchOut, PIN as FIXTURE_PIN } from "../../lib/__tests__/finding-fixtures";
 
 const runOne = (id: AgentId) => runAgent(AGENT_BY_ID[id]);
 
@@ -82,7 +85,10 @@ describe("run-agent on the free loop", () => {
     expect(o.tools).toEqual(toolsFor(id));
     expect(o.maxTurns).toBe(16);
     expect(o.userMessage).toMatch(/Run your review now per your standard procedure\.$/);
-    expect(Object.keys(o).sort()).toEqual(["agent", "maxTurns", "system", "tier", "tools", "userMessage"]);
+    // Engineering alone gets source follow-through (investigation-scope check).
+    const keys = ["agent", "maxTurns", "system", "tier", "tools", "userMessage", ...(id === "engineering" ? ["sourceFollowThrough"] : [])].sort();
+    expect(Object.keys(o).sort()).toEqual(keys);
+    if (id === "engineering") expect(o.sourceFollowThrough).toBe(true);
   });
 
   it("15. memory: a summary with figures not in this cycle's data is stored annotated, not as fact", async () => {
@@ -239,6 +245,45 @@ describe("run-agent on the free loop", () => {
       const o = runFreeLoop.mock.calls[0][0];
       expect(o).not.toHaveProperty("findingHistory");
       expect(o.userMessage).not.toContain("REJECTED by the evidence gate");
+    });
+  });
+
+  describe("investigation scope (Engineering)", () => {
+    const PAGE = "lib/feature/presentation/pages/feature_page.dart";
+    const scopeOf = (read: boolean) => {
+      const l = new EvidenceLedger({ commit: FIXTURE_PIN });
+      l.record("search_code", { query: "stateField" }, searchOut("stateField", [57, 123, 155, 177, 581].map((n) => [PAGE, n, `stateField ${n}`] as [string, number, string])));
+      if (read) l.record("read_repo_file", { path: PAGE }, readOut(PAGE, 2113, {}, 1, 100));
+      return buildScope(l.all(), { listRepoCalls: 2, searchCalls: 1 });
+    };
+
+    it("the runtime scope line is prepended to memory and grader input, and one investigation:scope row is logged", async () => {
+      const scope = scopeOf(true);
+      runFreeLoop.mockResolvedValue({ text: "I completed a thorough inspection of the codebase.", toolOutputs: [], status: "ok", scope, followUps: 2 });
+      await runOne("engineering");
+      const stored = writeMemory.mock.calls[0][1] as string;
+      expect(stored.startsWith("[Scope recorded by Mission Control: level partial · DB queries 0, stats 0 · discovery: list_repo 2, search_code 1 · source read: feature_page.dart 1–100 · unread leads: feature_page.dart 123–177; feature_page.dart 581 · ⚠ scope claim not supported by tool history]\n")).toBe(true);
+      expect(stored).toContain("I completed a thorough inspection of the codebase.");
+      expect(gradeAgentRun.mock.calls[0][2]).toBe(`${scopeLine(scope, detectOverclaim("I completed a thorough inspection of the codebase.", scope))}\nI completed a thorough inspection of the codebase.`);
+      const rows = logActivity.mock.calls.filter((c) => c[1] === "investigation:scope");
+      expect(rows).toHaveLength(1);
+      expect(JSON.parse(String(rows[0][2]))).toMatchObject({ v: 1, level: "partial", overclaim: "broad-scope", followUps: 2, linesRead: 100 });
+    });
+
+    it("an honest conclusion carries the scope line without a warning", async () => {
+      const scope = scopeOf(true);
+      runFreeLoop.mockResolvedValue({ text: "Nothing new in feature_page.dart lines 1–100; I did not inspect the rest.", toolOutputs: [], status: "ok", scope, followUps: 1 });
+      await runOne("engineering");
+      expect(writeMemory.mock.calls[0][1]).not.toContain("⚠ scope claim");
+      expect(JSON.parse(String(logActivity.mock.calls.find((c) => c[1] === "investigation:scope")![2]))).toMatchObject({ overclaim: null });
+    });
+
+    it("other agents: no scope line, no investigation:scope row (unchanged)", async () => {
+      runFreeLoop.mockResolvedValue({ text: "cycle summary", toolOutputs: [], status: "ok" });
+      await runOne("developer");
+      expect(writeMemory).toHaveBeenCalledWith("developer", "cycle summary");
+      expect(gradeAgentRun.mock.calls[0][2]).toBe("cycle summary");
+      expect(logActivity.mock.calls.some((c) => c[1] === "investigation:scope")).toBe(false);
     });
   });
 });

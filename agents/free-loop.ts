@@ -18,6 +18,13 @@
 // read-only tool result is recorded in a run-bound evidence ledger and gets
 // an evidence ref; save_suggestion findings are checked against that ledger
 // (lib/finding-gate.ts) and against duplicates before anything is saved.
+// Source follow-through (opt-in, Engineering): when the model tries to conclude,
+// the loop derives the run's real investigation scope from the evidence ledger
+// (lib/investigation-scope.ts). If its own specific searches pointed at code it
+// never read, or its conclusion claims a wider scope than the tool history
+// supports, it gets a bounded, deterministic follow-up (at most
+// MAX_FOLLOW_UPS, only with >= FOLLOW_UP_MIN_TURNS_LEFT turns left, no extra
+// turns). It never requires, creates or rewrites a finding.
 // Provider choice, quotas and the €0 hard stop all live in lib/free-llm.ts.
 
 import { freeLlm, type TaskTier } from "../lib/free-llm";
@@ -33,6 +40,7 @@ import { EVIDENCE_TOOLS, evidenceRefNote } from "../lib/evidence-ledger";
 import { renderFindingProse } from "../lib/finding-gate";
 import { createFindingRun, type FindingRun } from "../lib/finding-submit";
 import type { FindingHistory } from "../lib/finding-history";
+import { buildScope, detectOverclaim, followUpMessage, type InvestigationScope } from "../lib/investigation-scope";
 import type { AgentId } from "../lib/types";
 
 // ok        — the model concluded on its own (a turn with no tool calls).
@@ -46,6 +54,10 @@ export interface LoopOutput {
   toolOutputs: string[];
   status: LoopStatus;
   detail?: string; // why the loop stopped (never model output)
+  // Only with sourceFollowThrough: the run's deterministic investigation scope
+  // (from tool history, never from the model's wording) and follow-ups used.
+  scope?: InvestigationScope;
+  followUps?: number;
 }
 
 // The shape tools are already defined in (tools/registry.ts, agents/fix-agent.ts).
@@ -78,6 +90,10 @@ export const MAX_TOOL_CALLS_PER_TURN = 5;
 export const TOOL_TIMEOUT_MS = 60 * 1000;
 // Upper bound on one loop: last turn may start just before the deadline.
 export const MAX_LOOP_MS = LOOP_DEADLINE_MS + MAX_ROUTER_CALL_MS + MAX_TOOL_CALLS_PER_TURN * TOOL_TIMEOUT_MS;
+
+// Source follow-through bounds.
+export const MAX_FOLLOW_UPS = 2;
+export const FOLLOW_UP_MIN_TURNS_LEFT = 3;
 
 // Side-effect-free tools. Only these are timed out (a timed-out write could
 // still complete later) and only these continue the loop after throwing.
@@ -130,6 +146,9 @@ export async function runFreeLoop(opts: {
   // Existing/dismissed/rejected findings for duplicate detection (7b). When
   // absent, the first submission loads it (fail-closed).
   findingHistory?: FindingHistory | null;
+  // Opt-in (agents/run-agent.ts enables it for Engineering): check a
+  // conclusion against the run's recorded investigation scope first.
+  sourceFollowThrough?: boolean;
 }): Promise<LoopOutput> {
   const { agent, tier, system, userMessage, dispatch = dispatchTool } = opts;
   const maxTurns = Math.max(1, Math.min(opts.maxTurns ?? 8, MAX_TURNS_CAP));
@@ -142,11 +161,20 @@ export async function runFreeLoop(opts: {
   const messages: LlmMessage[] = [{ role: "user", content: userMessage }];
   const toolOutputs: string[] = [];
   let lastText = "";
+  // Discovery counters (list_repo is not in the ledger) and follow-up budget.
+  const counters = { listRepoCalls: 0, searchCalls: 0 };
+  let followUps = 0;
+  let leadsFollowUpUsed = false;
+  const follow = opts.sourceFollowThrough === true;
+  const currentScope = () => buildScope(findingRun ? findingRun.ledger.all() : [], counters);
+  // Adds the scope to every result, only when follow-through is on (so the
+  // output of every other caller is exactly as before).
+  const done = (o: LoopOutput): LoopOutput => (follow ? { ...o, scope: currentScope(), followUps } : o);
 
   for (let turn = 0; turn < maxTurns; turn++) {
     if (now() >= deadlineAt) {
       await safeLog(agent, "loop:deadline", `stopped before turn ${turn + 1}/${maxTurns}`);
-      return { text: "⚠ Agent stopped: time limit reached before the run finished.", toolOutputs, status: "stopped", detail: "deadline" };
+      return done({ text: "⚠ Agent stopped: time limit reached before the run finished.", toolOutputs, status: "stopped", detail: "deadline" });
     }
     const isFinalTurn = turn === maxTurns - 1;
     const turnTools = isFinalTurn && saveOnly.length ? saveOnly : tools;
@@ -163,11 +191,31 @@ export async function runFreeLoop(opts: {
       // Degrade gracefully: the router already refused every paid path.
       const msg = isLlmError(e) ? e.message : e instanceof Error ? e.message : String(e);
       if (msg.startsWith(FREE_AI_QUOTA_EXHAUSTED)) await safeLog(agent, "free-ai:stopped", msg.slice(0, 280));
-      return { text: `⚠ Agent error: free AI unavailable — ${msg.slice(0, 240)}`, toolOutputs, status: "stopped", detail: "free-ai-unavailable" };
+      return done({ text: `⚠ Agent error: free AI unavailable — ${msg.slice(0, 240)}`, toolOutputs, status: "stopped", detail: "free-ai-unavailable" });
     }
     lastText = res.text || lastText;
 
-    if (res.toolCalls.length === 0) return { text: res.text, toolOutputs, status: "ok" };
+    if (res.toolCalls.length === 0) {
+      // Source follow-through: before accepting a conclusion, compare it with
+      // the recorded scope. Unread leads get ONE follow-up (the chance to read
+      // them or say they were not inspected); an unsupported scope claim can
+      // use the rest of the budget. Never on the last turns, never extra turns.
+      const turnsLeftAfter = maxTurns - turn - 1;
+      if (follow && followUps < MAX_FOLLOW_UPS && turnsLeftAfter >= FOLLOW_UP_MIN_TURNS_LEFT) {
+        const scope = currentScope();
+        const leads = !leadsFollowUpUsed && scope.unreadLeads.length > 0;
+        const overclaim = detectOverclaim(res.text, scope);
+        if (leads || overclaim) {
+          followUps++;
+          if (leads) leadsFollowUpUsed = true;
+          await safeLog(agent, "loop:follow-through", `follow-up ${followUps}/${MAX_FOLLOW_UPS}: level ${scope.level}, unread leads ${scope.unreadLeads.length}${overclaim ? `, overclaim ${overclaim.kind}` : ""}`);
+          messages.push({ role: "assistant", content: res.text });
+          messages.push({ role: "user", content: followUpMessage(scope, leads, overclaim) });
+          continue;
+        }
+      }
+      return done({ text: res.text, toolOutputs, status: "ok" });
+    }
     messages.push({ role: "assistant", content: res.text, toolCalls: res.toolCalls });
 
     const offered = offeredToolNames(turnTools);
@@ -211,6 +259,8 @@ export async function runFreeLoop(opts: {
       } else {
         await logActivity(agent, `tool:${call.name}`, JSON.stringify(input).slice(0, 300));
         if (opts.codeCommit && PINNED_CODE_TOOLS.has(call.name)) ctx = { codeCommit: opts.codeCommit };
+        if (call.name === "list_repo") counters.listRepoCalls++;
+        if (call.name === "search_code") counters.searchCalls++;
       }
 
       let out: string;
@@ -224,7 +274,7 @@ export async function runFreeLoop(opts: {
         if (!READ_ONLY_TOOLS.has(call.name)) {
           // A write tool failed part-way; its effect is unknown. Stop instead
           // of letting the model retry it or report it as done.
-          return { text: `⚠ Agent stopped: ${call.name} failed (${why}).`, toolOutputs, status: "stopped", detail: `tool-error:${call.name}` };
+          return done({ text: `⚠ Agent stopped: ${call.name} failed (${why}).`, toolOutputs, status: "stopped", detail: `tool-error:${call.name}` });
         }
         // Read-only: report the failure to the model as missing data. It is
         // not added to toolOutputs, so it can never support a claim.
@@ -255,5 +305,5 @@ export async function runFreeLoop(opts: {
     }
     messages.push(...results);
   }
-  return { text: lastText || "Reached max turns.", toolOutputs, status: "max_turns" };
+  return done({ text: lastText || "Reached max turns.", toolOutputs, status: "max_turns" });
 }

@@ -9,7 +9,8 @@ vi.mock("../../lib/suggestions", () => ({ saveSuggestion: (...a: unknown[]) => s
 vi.mock("../../lib/supabase", () => ({ supabaseAdmin: {} }));
 vi.mock("../../lib/notify", () => ({ notify: (...a: unknown[]) => notify(...a) }));
 
-import { runFreeLoop, TURN_MAX_OUTPUT_TOKENS, MAX_TURNS_CAP, MAX_TOOL_CALLS_PER_TURN, LOOP_DEADLINE_MS, TOOL_TIMEOUT_MS, type ToolDef } from "../free-loop";
+import { runFreeLoop, TURN_MAX_OUTPUT_TOKENS, MAX_TURNS_CAP, MAX_TOOL_CALLS_PER_TURN, LOOP_DEADLINE_MS, TOOL_TIMEOUT_MS, MAX_FOLLOW_UPS, FOLLOW_UP_MIN_TURNS_LEFT, type ToolDef } from "../free-loop";
+import { readOut, searchOut, PIN as FIXTURE_PIN } from "../../lib/__tests__/finding-fixtures";
 import { toolsFor, dispatchTool, type DispatchContext } from "../../tools/registry";
 import { LlmError } from "../../lib/llm-errors";
 import type { LlmRequest } from "../../lib/llm";
@@ -430,5 +431,124 @@ describe("free loop", () => {
     const src = readFileSync(join(__dirname, "..", "free-loop.ts"), "utf8");
     expect(src).toMatch(/from "\.\.\/lib\/free-llm"/);
     expect(src).not.toMatch(new RegExp(["@anthro" + "pic-ai", "lib/anthro" + "pic", "run-loop\"", "open" + "ai", "process\\.env"].join("|"), "i"));
+  });
+
+  describe("source follow-through (opt-in, Engineering)", () => {
+    // Generic structure only: a declaration near the top of a page, a logic
+    // block further down and a stray use. No real symbol is special-cased.
+    const PAGE = "lib/feature/presentation/pages/feature_page.dart";
+    const HITS: [string, number, string][] = [57, 123, 155, 177, 194, 197, 202, 204, 581].map((n) => [PAGE, n, `stateField use ${n}`]);
+    const codeTools = [tool("list_repo"), tool("search_code"), tool("read_repo_file"), tool("save_suggestion")];
+    const makeDispatch = () =>
+      vi.fn(async (_a: AgentId, name: string, input: Record<string, unknown>) => {
+        if (name === "search_code") return searchOut(String(input.q ?? input.query), HITS);
+        if (name === "read_repo_file") return input.fail ? "GitHub 502: could not read x." : readOut(PAGE, 2113, {}, Number(input.start_line), Number(input.end_line));
+        if (name === "list_repo") return "lib/\ntest/";
+        if (name === "db_read") return '[{"n":1}]';
+        return "Saved.";
+      });
+    const run = (extra: Partial<Parameters<typeof runFreeLoop>[0]> = {}) =>
+      runFreeLoop({ agent: "engineering", tier: "medium", system: "s", userMessage: "u", tools: codeTools, dispatch: makeDispatch(), codeCommit: FIXTURE_PIN, findingHistory: { entries: [] }, maxTurns: 16, sourceFollowThrough: true, ...extra });
+    const search = () => reply("", [{ name: "search_code", input: { query: "stateField" } }]);
+    const readR = (a: number, b: number) => reply("", [{ name: "read_repo_file", input: { path: PAGE, start_line: a, end_line: b } }]);
+    const OVERCLAIM = "I have completed a thorough inspection of the live database state, repository architecture, and codebase.";
+    const followUpsIn = (i: number) => reqAt(i).messages.filter((m) => m.role === "user" && String(m.content).startsWith("[Mission Control] Before you conclude"));
+
+    it("E/I. one small unrelated read + a codebase-wide claim: bounded follow-ups (max 2), then the conclusion is accepted with the recorded scope", async () => {
+      generate.mockResolvedValueOnce(search()).mockResolvedValueOnce(readR(1, 100)).mockResolvedValue(reply(OVERCLAIM));
+      const out = await run();
+      expect(generate).toHaveBeenCalledTimes(5); // 2 tool turns + conclusion + 2 re-conclusions
+      expect(MAX_FOLLOW_UPS).toBe(2);
+      expect(out).toMatchObject({ status: "ok", text: OVERCLAIM, followUps: 2, scope: { level: "partial", listRepoCalls: 0, searchCalls: 1 } });
+      expect(out.scope!.sourceReads).toEqual([{ file: PAGE, ranges: [{ start: 1, end: 100 }] }]);
+      expect(out.scope!.unreadLeads.map((l) => `${l.start}-${l.end}`)).toEqual(["123-204", "581-581"]);
+      // The loop reuses one message list, so read both follow-ups from the last request.
+      const both = followUpsIn(4);
+      expect(both).toHaveLength(2);
+      const first = String(both[0].content);
+      expect(first).toContain(`${PAGE} lines 123–204 (7 hits for "stateField")`);
+      expect(first).toContain("search_code and list_repo are discovery only");
+      expect(first).toContain("You are not required to submit a finding.");
+      expect(first).toContain('("thorough")');
+      const second = String(both[1].content);
+      expect(second).not.toContain("Your searches found code you have not read"); // the leads prompt is given once
+      expect(second).toContain("wider scope than the tool history supports");
+      expect(logActivity.mock.calls.filter((c) => c[1] === "loop:follow-through")).toHaveLength(2);
+    });
+
+    it("F. reading the lead clusters lets the agent conclude normally, with no follow-up", async () => {
+      generate
+        .mockResolvedValueOnce(search())
+        .mockResolvedValueOnce(reply("", [{ name: "read_repo_file", input: { path: PAGE, start_line: 40, end_line: 220 } }, { name: "read_repo_file", input: { path: PAGE, start_line: 560, end_line: 600 } }]))
+        .mockResolvedValueOnce(reply("Nothing new in feature_page.dart lines 40–220 and 560–600."));
+      const out = await run();
+      expect(generate).toHaveBeenCalledTimes(3);
+      expect(out).toMatchObject({ status: "ok", followUps: 0, scope: { level: "targeted", unreadLeads: [] } });
+    });
+
+    it("G. an honest no-findings conclusion is accepted after at most one chance to read the leads — no finding is ever required", async () => {
+      const honest = "I found nothing new in feature_page.dart lines 1–100. I did not inspect lines 123–204 or 581.";
+      const dispatch = makeDispatch();
+      generate.mockResolvedValueOnce(search()).mockResolvedValueOnce(readR(1, 100)).mockResolvedValue(reply(honest));
+      const out = await run({ dispatch });
+      expect(generate).toHaveBeenCalledTimes(4);
+      expect(out).toMatchObject({ status: "ok", text: honest, followUps: 1 });
+      expect(dispatch.mock.calls.some((c) => c[1] === "save_suggestion")).toBe(false);
+    });
+
+    it("H. a database-only investigation that says so is not blocked", async () => {
+      generate.mockResolvedValueOnce(reply("", [{ name: "db_read", input: { sql: "select 1" } }])).mockResolvedValueOnce(reply("Nothing new in the database queries I ran; I did not read any source code."));
+      const out = await run({ tools: [tool("db_read"), tool("save_suggestion")] });
+      expect(generate).toHaveBeenCalledTimes(2);
+      expect(out).toMatchObject({ status: "ok", followUps: 0, scope: { level: "none", dbQueries: 1 } });
+    });
+
+    it("K. with sourceFollowThrough off (every other agent) the loop behaves exactly as before", async () => {
+      generate.mockResolvedValueOnce(search()).mockResolvedValueOnce(readR(1, 100)).mockResolvedValue(reply(OVERCLAIM));
+      const out = await run({ sourceFollowThrough: false });
+      expect(generate).toHaveBeenCalledTimes(3);
+      expect(out).toEqual({ text: OVERCLAIM, toolOutputs: expect.any(Array), status: "ok" });
+      expect(logActivity.mock.calls.some((c) => c[1] === "loop:follow-through")).toBe(false);
+    });
+
+    it("M. no follow-up with fewer than 3 turns left, no extra turns, final-turn behaviour unchanged", async () => {
+      expect(FOLLOW_UP_MIN_TURNS_LEFT).toBe(3);
+      generate.mockResolvedValueOnce(search()).mockResolvedValue(reply(OVERCLAIM));
+      const five = await run({ maxTurns: 5 });
+      expect(generate).toHaveBeenCalledTimes(3); // conclusion at turn 2 (3 left) -> 1 follow-up; turn 3 (2 left) -> accepted
+      expect(five.followUps).toBe(1);
+
+      generate.mockReset();
+      generate.mockResolvedValue(search());
+      const capped = await run({ maxTurns: 3 });
+      expect(generate).toHaveBeenCalledTimes(3); // never more than maxTurns
+      expect(capped.status).toBe("max_turns");
+      expect(reqAt(2).tools!.map((t) => t.name)).toEqual(["save_suggestion"]); // final turn still save-only
+    });
+
+    it("N. the scope is taken from tool history, never from the model's claims; failed reads count for nothing", async () => {
+      generate
+        .mockResolvedValueOnce(search())
+        .mockResolvedValueOnce(reply("", [{ name: "read_repo_file", input: { path: PAGE, start_line: 100, end_line: 900, fail: true } }]))
+        .mockResolvedValue(reply("I read feature_page.dart in full; nothing new."));
+      const out = await run();
+      expect(out.scope).toMatchObject({ level: "discovery-only", sourceReads: [], sourceLinesRead: 0 });
+      expect(out.scope!.unreadLeads).toHaveLength(3);
+    });
+
+    it("L. save_suggestion is dispatched exactly as without follow-through (7b/7c path untouched)", async () => {
+      const idea = { class: "product_idea", title: "t", claim: "c", impact: "i", proposed_change: "p", priority: "low" };
+      const calls: unknown[][] = [];
+      for (const on of [true, false]) {
+        generate.mockReset();
+        generate.mockResolvedValueOnce(reply("", [{ name: "save_suggestion", input: idea }])).mockResolvedValueOnce(reply("Saved one idea about the rankings screen I read."));
+        const dispatch = makeDispatch();
+        await run({ dispatch, sourceFollowThrough: on, tools: [tool("save_suggestion")] });
+        const save = dispatch.mock.calls.find((c) => c[1] === "save_suggestion")! as unknown[];
+        calls.push([save[0], save[1], save[2], Object.keys(save[3] as object).sort()]);
+      }
+      expect(calls[0]).toEqual(calls[1]);
+      expect(calls[0][3]).toEqual(["appendix", "finding", "guardPassed"]);
+    });
   });
 });

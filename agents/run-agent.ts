@@ -10,6 +10,7 @@ import { acquireAgentLock, releaseAgentLock } from "../lib/lock";
 import { suggestionsSince } from "../lib/suggestions";
 import { gradeAgentRun } from "../lib/evals";
 import { loadFindingHistory, historyDigest, type FindingHistory } from "../lib/finding-history";
+import { detectOverclaim, scopeLine, scopeDetail } from "../lib/investigation-scope";
 import type { AgentId, Suggestion } from "../lib/types";
 
 // Status logging must never change the outcome of a run.
@@ -20,6 +21,10 @@ async function safeLog(agent: AgentId, action: string, detail: string): Promise<
     // ignored
   }
 }
+
+// Agents whose conclusions are checked against their recorded investigation
+// scope (source follow-through, agents/free-loop.ts). Engineering only for now.
+const SOURCE_FOLLOW_THROUGH_AGENTS: ReadonlySet<AgentId> = new Set<AgentId>(["engineering"]);
 
 // The outcome the cycle runner (agents/cycle.ts) uses to decide whether a
 // change-detection baseline may be written: only "ok" counts as success.
@@ -101,7 +106,8 @@ export async function runAgentDetailed(spec: AgentSpec): Promise<AgentRunResult>
     const cycleStart = new Date().toISOString();
     // Free-only path: the router picks an approved free model for this
     // agent's tier (agents/agent-tiers.ts); no Anthropic call.
-    const { text, toolOutputs, status, detail } = await runFreeLoop({
+    const followThrough = SOURCE_FOLLOW_THROUGH_AGENTS.has(spec.id);
+    const { text, toolOutputs, status, detail, scope, followUps } = await runFreeLoop({
       agent: spec.id,
       tier: tierForAgent(spec.id),
       system: spec.system,
@@ -114,7 +120,13 @@ export async function runAgentDetailed(spec: AgentSpec): Promise<AgentRunResult>
       maxTurns: 16,
       ...(codeCommit ? { codeCommit } : {}),
       ...(history ? { findingHistory: history } : {}),
+      ...(followThrough ? { sourceFollowThrough: true } : {}),
     });
+    // Runtime-recorded scope (from tool history, never from the model's
+    // wording) is put in front of the conclusion used for memory and grading.
+    const overclaim = followThrough && scope ? detectOverclaim(text, scope) : null;
+    const scopePrefix = followThrough && scope ? scopeLine(scope, overclaim) : "";
+    if (followThrough && scope) await safeLog(spec.id, "investigation:scope", scopeDetail(scope, overclaim, followUps ?? 0));
     // Memory is written only for a natural conclusion ("ok"). A stopped run
     // (no free AI, deadline, failed write tool) or a maxed-out run has no
     // trustworthy conclusion, and its status text must never be replayed to
@@ -123,7 +135,8 @@ export async function runAgentDetailed(spec: AgentSpec): Promise<AgentRunResult>
     // [unverified] before they can be replayed. Verified summaries are stored unchanged.
     if (status === "ok") {
       const memory = guardSummary(text, { data: toolOutputs, context: [userMessage, spec.system] });
-      await writeMemory(spec.id, memory.text.slice(0, 500));
+      // The scope line is runtime fact, added after the figure guard.
+      await writeMemory(spec.id, (scopePrefix ? `${scopePrefix}\n${memory.text}` : memory.text).slice(0, 500));
     } else {
       await safeLog(spec.id, "memory:skipped", `loop ${status}${detail ? ` (${detail})` : ""}`);
     }
@@ -138,7 +151,7 @@ export async function runAgentDetailed(spec: AgentSpec): Promise<AgentRunResult>
     // after the providers failed — skip it. ok / max_turns are still graded.
     if (status !== "stopped") {
       const saved = await suggestionsSince(spec.id, cycleStart).catch(() => [] as Suggestion[]);
-      await gradeAgentRun(spec.id, cycleStart, text, saved, open).catch(() => {});
+      await gradeAgentRun(spec.id, cycleStart, scopePrefix ? `${scopePrefix}\n${text}` : text, saved, open).catch(() => {});
     }
 
     return { outcome: status, text, ...(detail ? { detail } : {}) };
