@@ -208,9 +208,10 @@ export async function dispatchTool(
       // saved (a legacy caller has no evidence ledger).
       const finding = ctx?.finding ? { ...ctx.finding, ...(ctx.appendix ? { appendix: ctx.appendix } : {}) } : undefined;
       const out = await submitFinding(agent, input, finding);
-      // Only a gate-verified bug can alert, and only with explicit claim-guard
-      // approval (unchanged 6a rule). Risks and ideas never alert.
-      if (out.saved && out.saved.finalClass === "verified_bug" && shouldAlert(out.saved.priority, ctx)) {
+      // Only a gate-verified bug that SURVIVED independent verification (7c)
+      // can alert, and only with explicit claim-guard approval (unchanged 6a
+      // rule). Risks and ideas never alert.
+      if (out.saved && out.saved.finalClass === "verified_bug" && out.saved.verified === true && shouldAlert(out.saved.priority, ctx)) {
         await notify(`🔴 ${AGENT_BY_ID[agent]?.name ?? agent} flagged (high): ${out.saved.title}`);
       }
       return out.message;

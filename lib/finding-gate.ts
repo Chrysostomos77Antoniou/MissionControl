@@ -377,7 +377,7 @@ function checkAssertion(f: FindingInput, evs: ValidatedEvidence[], ledger: Evide
   return { status: "ok" };
 }
 
-function ideaCategory(raw: string | undefined): string {
+export function ideaCategory(raw: string | undefined): string {
   const c = normalizeCategory(raw ?? "");
   return c.valid && !RESERVED_IDEA_CATEGORIES.has(c.category) ? c.category : "idea";
 }

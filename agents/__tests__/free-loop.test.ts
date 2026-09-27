@@ -183,12 +183,19 @@ describe("free loop", () => {
           const ref = /\[evidence ref: (ev\d+-[0-9a-f]{6})/.exec(String(req.messages.at(-1)?.content))![1];
           return reply("", [{ name: "save_suggestion", input: { class: "plausible_risk", title: "Only 2 of 19 teams are active", claim: "Only 2 of 19 teams are active.", failure_scenario: "New players find no opponents.", impact: "Churn.", evidence: [{ ref, excerpt: "total_teams: 19, active_teams: 2" }], proposed_change: "Run a captain outreach.", priority: "high" } }]);
         })
+        // 7c: the independent verifier's single bounded call (same free router, medium tier)
+        .mockResolvedValueOnce({ ...reply('{"verdict":"SURVIVES","reason_code":"supported","downgrade_to":null,"supporting":["E1"],"contradicting":[]}'), provider: "gemini", model: "gemini-3.5-flash-lite" })
         .mockResolvedValueOnce(reply("done"));
       await runFreeLoop({ agent: "growth", tier: "medium", system: "s", userMessage: "u", tools: toolsFor("growth"), findingHistory: NO_HISTORY, dispatch: async (a, n, i, c) => (n === "db_read" ? "total_teams: 19, active_teams: 2" : dispatchTool(a, n, i, c)) });
       const saved = saveSuggestion.mock.calls[0][0];
       expect(saved).toMatchObject({ category: "risk", priority: "medium", title: "[Risk] Only 2 of 19 teams are active" });
       expect(saved.body).toMatch(/^\*\*Class:\*\* Risk — NOT a confirmed defect\./);
       expect(saved.body).toContain("- db_read — `total_teams: 19, active_teams: 2`");
+      expect(saved.body).toContain("**Independent verification:** SURVIVES (supported) · verifier gemini/gemini-3.5-flash-lite");
+      expect(generate.mock.calls[2][0]).toBe("medium"); // the verifier never uses the high tier
+      expect(generate.mock.calls[2][1]).toMatchObject({ json: expect.anything() });
+      expect(generate.mock.calls[2][1].tools).toBeUndefined();
+      expect(generate).toHaveBeenCalledTimes(4); // bounded: exactly one verifier call
       expect(notify).not.toHaveBeenCalled();
     });
 

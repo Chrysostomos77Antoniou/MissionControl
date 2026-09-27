@@ -17,6 +17,9 @@ export const HISTORY_DAYS = 90;
 export const REJECTED_ACTION = "finding:rejected";
 
 export type HistorySource = "open" | "dismissed" | "done" | "rejected";
+// Why a finding was rejected: a 7b gate code, or a 7c verifier outcome
+// (deterministic contradiction vs a model REJECT).
+export type RejectCode = GateCode | "verifier_contradicted" | "verifier_rejected";
 
 export interface HistoryEntry {
   id: string | null;
@@ -25,7 +28,7 @@ export interface HistoryEntry {
   title: string;
   createdAt: string;
   print: FindingPrint;
-  rejectCode?: GateCode;
+  rejectCode?: RejectCode;
 }
 
 export interface FindingHistory {
@@ -46,11 +49,11 @@ interface SuggestionRow {
 
 const LIST = /^[A-Za-z0-9_.:+-]+$/;
 const cleanList = (v: unknown, max: number) => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string" && LIST.test(x)).slice(0, max) : []);
-const GATE_CODES: GateCode[] = ["invalid_input", "invalid_evidence", "contradicted", "unsupported_absence", "insufficient"];
+const REJECT_CODES: RejectCode[] = ["invalid_input", "invalid_evidence", "contradicted", "unsupported_absence", "insufficient", "verifier_contradicted", "verifier_rejected"];
 const CLASSES: FindingClass[] = ["verified_bug", "plausible_risk", "product_idea"];
 
 // Compact, bounded record of one rejected finding (stored in activity_log.detail).
-export function rejectedDetail(r: { code: GateCode; cls?: FindingClass; title: string; print: FindingPrint }): string {
+export function rejectedDetail(r: { code: RejectCode; cls?: FindingClass; title: string; print: FindingPrint }): string {
   const p = r.print;
   return JSON.stringify({
     v: 1,
@@ -61,15 +64,15 @@ export function rejectedDetail(r: { code: GateCode; cls?: FindingClass; title: s
   });
 }
 
-export function parseRejectedDetail(detail: string | null): { code: GateCode; cls?: FindingClass; title: string; print: FindingPrint } | null {
+export function parseRejectedDetail(detail: string | null): { code: RejectCode; cls?: FindingClass; title: string; print: FindingPrint } | null {
   if (!detail) return null;
   try {
     const o = JSON.parse(detail) as Record<string, unknown>;
     const p = (o.print ?? {}) as Record<string, unknown>;
-    if (o.v !== 1 || !GATE_CODES.includes(o.code as GateCode) || (p.family !== "defect" && p.family !== "idea")) return null;
+    if (o.v !== 1 || !REJECT_CODES.includes(o.code as RejectCode) || (p.family !== "defect" && p.family !== "idea")) return null;
     const cls = CLASSES.includes(o.cls as FindingClass) ? (o.cls as FindingClass) : undefined;
     return {
-      code: o.code as GateCode,
+      code: o.code as RejectCode,
       ...(cls ? { cls } : {}),
       title: typeof o.title === "string" ? o.title.slice(0, 120) : "",
       print: {
@@ -117,7 +120,8 @@ export function historyDigest(h: FindingHistory, limit = 12): string {
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
     .slice(0, limit)
     .map((e) => {
-      const tag = e.source === "rejected" ? `rejected by the evidence gate: ${e.rejectCode}` : e.source === "done" ? "done" : "dismissed by the owner";
+      const by = e.rejectCode?.startsWith("verifier_") ? "independent verification" : "the evidence gate";
+      const tag = e.source === "rejected" ? `rejected by ${by}: ${e.rejectCode}` : e.source === "done" ? "done" : "dismissed by the owner";
       const where = e.print.files.length ? ` (${e.print.files.slice(0, 3).join(", ")}${e.print.symbol ? ` › ${e.print.symbol}` : ""})` : "";
       return `- [${tag}] ${e.title.replace(/\s+/g, " ").slice(0, 120)}${where}`;
     });

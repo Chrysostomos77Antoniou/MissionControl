@@ -7,7 +7,7 @@ vi.mock("../../lib/memory", () => ({ logActivity: (...a: unknown[]) => logActivi
 vi.mock("../../lib/supabase", () => ({ supabaseAdmin: {} }));
 
 import { dispatchTool, shouldAlert, type DispatchContext } from "../registry";
-import { case1 } from "../../lib/__tests__/finding-fixtures";
+import { case1, fakeVerifier, fakeModel } from "../../lib/__tests__/finding-fixtures";
 
 // 7b: a high-priority finding alerts only when the evidence gate verified it as
 // a bug AND the claim guard verified every figure (6a rule unchanged).
@@ -23,7 +23,7 @@ beforeEach(() => {
   logActivity.mockReset();
 });
 
-describe("high-priority alert requires explicit claim-guard approval (6a) and a gate-verified bug (7b)", () => {
+describe("high-priority alert requires explicit claim-guard approval (6a), a gate-verified bug (7b) and independent verification (7c)", () => {
   it("shouldAlert: only guardPassed === true, notify !== false and priority high", () => {
     expect(shouldAlert("high", { guardPassed: true })).toBe(true);
     expect(shouldAlert("high", { guardPassed: true, notify: true })).toBe(true);
@@ -68,6 +68,33 @@ describe("high-priority alert requires explicit claim-guard approval (6a) and a 
     await dispatchTool("uxdesign", "save_suggestion", { ...c.input, class: "product_idea", category: "security" }, findingCtx(c, { guardPassed: true }));
     expect(saveSuggestion.mock.calls[0][0]).toMatchObject({ category: "idea", priority: "low" });
     expect(saveSuggestion.mock.calls[0][0].title).toMatch(/^\[Idea\] /);
+    expect(notify).not.toHaveBeenCalled();
+  });
+
+  it("7c: a verified bug the independent verifier DOWNGRADES is saved as a medium risk and never alerts", async () => {
+    const c = highBug();
+    c.run.verifier = fakeVerifier({ model: fakeModel(JSON.stringify({ verdict: "DOWNGRADE", reason_code: "overstated", downgrade_to: null, supporting: ["E1"], contradicting: [] })) });
+    await dispatchTool("uxdesign", "save_suggestion", c.input, findingCtx(c, { guardPassed: true }));
+    expect(saveSuggestion.mock.calls[0][0]).toMatchObject({ category: "risk", priority: "medium" });
+    expect(notify).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["verifier REJECT", JSON.stringify({ verdict: "REJECT", reason_code: "speculative", supporting: [], contradicting: [] })],
+    ["malformed verifier output", "yes this is real"],
+    ["verifier provider failure", new Error("FREE_AI_QUOTA_EXHAUSTED")],
+  ])("7c: %s => nothing saved, no alert", async (_l, reply) => {
+    const c = highBug();
+    c.run.verifier = fakeVerifier({ model: fakeModel(reply) });
+    expect(await dispatchTool("uxdesign", "save_suggestion", c.input, findingCtx(c, { guardPassed: true }))).toMatch(/^Not saved/);
+    expect(saveSuggestion).not.toHaveBeenCalled();
+    expect(notify).not.toHaveBeenCalled();
+  });
+
+  it("7c: a high-priority risk that SURVIVES verification is still a medium risk and never alerts", async () => {
+    const c = highBug();
+    await dispatchTool("uxdesign", "save_suggestion", { ...c.input, class: "plausible_risk" }, findingCtx(c, { guardPassed: true }));
+    expect(saveSuggestion.mock.calls[0][0]).toMatchObject({ category: "risk", priority: "medium" });
     expect(notify).not.toHaveBeenCalled();
   });
 
