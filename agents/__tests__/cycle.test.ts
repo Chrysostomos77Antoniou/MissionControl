@@ -28,6 +28,11 @@ vi.mock("../../lib/suggestions", () => ({
   saveSuggestion: m.saveSuggestion,
 }));
 vi.mock("../../lib/evals", () => ({ gradeAgentRun: m.gradeAgentRun }));
+// The real run path pins a FootRank commit at run start; keep it off the network.
+vi.mock("../../tools/github-read", async (orig) => ({
+  ...(await orig<typeof import("../../tools/github-read")>()),
+  resolveFootRankCommit: async () => ({ ok: false, reason: "not configured in tests" }),
+}));
 vi.mock("../../lib/notify", () => ({ notify: vi.fn() }));
 vi.mock("../../lib/usage", () => ({ withinBudget: vi.fn().mockResolvedValue({ ok: true, detail: "" }) }));
 vi.mock("../../lib/health", () => ({ alertIfCredentialsBroken: vi.fn().mockResolvedValue(undefined) }));

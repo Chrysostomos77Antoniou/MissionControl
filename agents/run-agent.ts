@@ -2,7 +2,8 @@ import { runFreeLoop } from "./free-loop";
 import { tierForAgent } from "./agent-tiers";
 import { guardSummary } from "../lib/claim-guard";
 import type { AgentSpec } from "./registry";
-import { toolsFor } from "../tools/registry";
+import { toolsFor, PINNED_CODE_TOOLS } from "../tools/registry";
+import { resolveFootRankCommit } from "../tools/github-read";
 import { writeMemory, recentMemory, logActivity } from "../lib/memory";
 import { openSuggestionsForAgent, allOpenSuggestionsDigest } from "../lib/suggestions";
 import { acquireAgentLock, releaseAgentLock } from "../lib/lock";
@@ -51,6 +52,18 @@ export async function runAgentDetailed(spec: AgentSpec): Promise<AgentRunResult>
     return { outcome: "lock-error", text: `⚠ Skipped — could not verify the run lock (${lock.detail}). Nothing was run.`, detail: lock.detail };
   }
   try {
+    // Pin ONE FootRank commit for this whole run, resolved once from GitHub,
+    // so read_repo_file and search_code can never mix source versions. Only
+    // agents that read code need it; if it can't be resolved, both code tools
+    // refuse (fail closed) and the rest of the run proceeds normally.
+    const tools = toolsFor(spec.id);
+    let codeCommit: string | undefined;
+    if (tools.some((t) => PINNED_CODE_TOOLS.has(t.name))) {
+      const pin = await resolveFootRankCommit();
+      if (pin.ok) codeCommit = pin.sha;
+      else await safeLog(spec.id, "code:pin-failed", pin.reason);
+    }
+
     // The real, accurate signal for what's still unresolved — not a fuzzy
     // memory of what the agent last happened to write. A still-open finding
     // doesn't need re-saving; that's what made every cycle look "different"
@@ -84,12 +97,13 @@ export async function runAgentDetailed(spec: AgentSpec): Promise<AgentRunResult>
       tier: tierForAgent(spec.id),
       system: spec.system,
       userMessage,
-      tools: toolsFor(spec.id),
+      tools,
       // Was 12 — broad-scope agents (architecture, UX, funnel analysis) were
       // routinely hitting this cap mid-investigation and dead-ending on
       // "Reached max turns." with zero usable output, for the same spend as
       // a successful run. Paired with the wrap-up nudge in run-loop.ts.
       maxTurns: 16,
+      ...(codeCommit ? { codeCommit } : {}),
     });
     // Memory is written only for a natural conclusion ("ok"). A stopped run
     // (no free AI, deadline, failed write tool) or a maxed-out run has no

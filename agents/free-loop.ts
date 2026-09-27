@@ -19,7 +19,7 @@
 import { freeLlm, type TaskTier } from "../lib/free-llm";
 import { toLlmToolSpec, type LlmMessage, type LlmToolSpec } from "../lib/llm";
 import { isLlmError, FREE_AI_QUOTA_EXHAUSTED } from "../lib/llm-errors";
-import { dispatchTool, type DispatchContext } from "../tools/registry";
+import { dispatchTool, PINNED_CODE_TOOLS, type DispatchContext } from "../tools/registry";
 import { guardSuggestion, checkClaims, markInline, type ClaimMaterial } from "../lib/claim-guard";
 import { normalizeCategory } from "../lib/suggestion-category";
 import { redactText } from "../lib/redact";
@@ -73,7 +73,7 @@ export const MAX_LOOP_MS = LOOP_DEADLINE_MS + MAX_ROUTER_CALL_MS + MAX_TOOL_CALL
 
 // Side-effect-free tools. Only these are timed out (a timed-out write could
 // still complete later) and only these continue the loop after throwing.
-export const READ_ONLY_TOOLS: ReadonlySet<string> = new Set(["web_search", "read_footrank_stats", "db_read", "list_repo", "read_repo_file"]);
+export const READ_ONLY_TOOLS: ReadonlySet<string> = new Set(["web_search", "read_footrank_stats", "db_read", "list_repo", "read_repo_file", "search_code"]);
 
 const NUDGE_TWO_LEFT = (n: number) =>
   `[Mission Control] You have ${n} turns left before this cycle ends automatically. Stop opening new investigation threads and write your final conclusion now — synthesize what you've already found into your best answer, even if incomplete, and save any suggestion immediately rather than waiting.`;
@@ -116,6 +116,9 @@ export async function runFreeLoop(opts: {
   dispatch?: (agent: AgentId, name: string, input: Record<string, unknown>, ctx?: DispatchContext) => Promise<string>;
   deadlineMs?: number; // defaults to LOOP_DEADLINE_MS; can only be shortened
   now?: () => number; // injectable clock (tests)
+  // The run's pinned FootRank commit (agents/run-agent.ts). Handed ONLY to the
+  // code-reading tools, as loop-supplied context the model cannot set.
+  codeCommit?: string;
 }): Promise<LoopOutput> {
   const { agent, tier, system, userMessage, dispatch = dispatchTool } = opts;
   const maxTurns = Math.max(1, Math.min(opts.maxTurns ?? 8, MAX_TURNS_CAP));
@@ -192,6 +195,7 @@ export async function runFreeLoop(opts: {
         await logActivity(agent, `tool:${call.name}`, guardedLogDetail(input, material));
       } else {
         await logActivity(agent, `tool:${call.name}`, JSON.stringify(input).slice(0, 300));
+        if (opts.codeCommit && PINNED_CODE_TOOLS.has(call.name)) ctx = { codeCommit: opts.codeCommit };
       }
 
       let out: string;

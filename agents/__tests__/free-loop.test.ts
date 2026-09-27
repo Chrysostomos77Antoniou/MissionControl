@@ -344,6 +344,48 @@ describe("free loop", () => {
     });
   });
 
+  describe("pinned FootRank commit handover (7a)", () => {
+    const PIN = "27e1e5ac5a89cb9d5f5cb7ca6a1368afa0582a46";
+    const calls = () => [
+      { name: "read_repo_file", input: { path: "lib/a.dart" } },
+      { name: "search_code", input: { query: "x" } },
+      { name: "db_read", input: { q: "select 1" } },
+    ];
+
+    it("only read_repo_file and search_code receive the run's pinned commit, as loop-supplied context", async () => {
+      generate.mockResolvedValueOnce(reply("", calls())).mockResolvedValueOnce(reply("done"));
+      const dispatch = vi.fn().mockResolvedValue("ok");
+      await runFreeLoop({ agent: "engineering", tier: "medium", system: "s", userMessage: "u", tools: [tool("read_repo_file"), tool("search_code"), tool("db_read")], dispatch, codeCommit: PIN });
+      expect(dispatch.mock.calls[0]).toEqual(["engineering", "read_repo_file", { path: "lib/a.dart" }, { codeCommit: PIN }]);
+      expect(dispatch.mock.calls[1]).toEqual(["engineering", "search_code", { query: "x" }, { codeCommit: PIN }]);
+      expect(dispatch.mock.calls[2]).toEqual(["engineering", "db_read", { q: "select 1" }]); // other tools: unchanged, no context
+    });
+
+    it("the same pin is used for every code call in the run, whatever the model asks for", async () => {
+      generate
+        .mockResolvedValueOnce(reply("", [{ name: "read_repo_file", input: { path: "a", commit: "1111111111111111111111111111111111111111" } }]))
+        .mockResolvedValueOnce(reply("", [{ name: "search_code", input: { query: "y", codeCommit: "2222222222222222222222222222222222222222" } }]))
+        .mockResolvedValueOnce(reply("done"));
+      const dispatch = vi.fn().mockResolvedValue("ok");
+      await runFreeLoop({ agent: "qa", tier: "medium", system: "s", userMessage: "u", tools: [tool("read_repo_file"), tool("search_code")], dispatch, codeCommit: PIN });
+      expect(dispatch.mock.calls.map((c) => c[3])).toEqual([{ codeCommit: PIN }, { codeCommit: PIN }]);
+    });
+
+    it("save_suggestion's guard context never carries the pin", async () => {
+      generate.mockResolvedValueOnce(reply("", [{ name: "save_suggestion", input: { category: "bug", title: "t", body: "b", evidence: "e", priority: "low" } }])).mockResolvedValueOnce(reply("done"));
+      const dispatch = vi.fn().mockResolvedValue("Saved.");
+      await runFreeLoop({ agent: "qa", tier: "medium", system: "s", userMessage: "u", tools: [tool("save_suggestion")], dispatch, codeCommit: PIN });
+      expect(dispatch.mock.calls[0][3]).not.toHaveProperty("codeCommit");
+    });
+
+    it("without a pin (e.g. the fix agent's loop) code tools are dispatched exactly as before", async () => {
+      generate.mockResolvedValueOnce(reply("", [{ name: "read_repo_file", input: { path: "lib/a.dart" } }])).mockResolvedValueOnce(reply("done"));
+      const dispatch = vi.fn().mockResolvedValue("raw");
+      await runFreeLoop({ agent: "developer", tier: "high", system: "s", userMessage: "u", tools: [tool("read_repo_file")], dispatch });
+      expect(dispatch.mock.calls[0]).toEqual(["developer", "read_repo_file", { path: "lib/a.dart" }]);
+    });
+  });
+
   it("10/17. the loop source uses only the free router — no Anthropic, OpenAI or legacy loop", () => {
     const src = readFileSync(join(__dirname, "..", "free-loop.ts"), "utf8");
     expect(src).toMatch(/from "\.\.\/lib\/free-llm"/);

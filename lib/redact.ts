@@ -11,6 +11,14 @@ const SECRETS = /\b(?:sk-[A-Za-z0-9_-]{16,}|sk-ant-[A-Za-z0-9_-]{16,}|gh[pousr]_
 const BEARER = /\b(Bearer)\s+[A-Za-z0-9._~+/=-]{16,}/gi;
 const UUID = /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi;
 
+// Secrets only (API keys, tokens, JWTs, bearer headers) — for source code
+// shown to agents (tools/github-read.ts, tools/code-search.ts). The personal-
+// data patterns above are deliberately NOT applied there: they would mangle
+// ordinary numbers and identifiers in code that agents must quote exactly.
+export function redactSecrets(s: string): string {
+  return s.replace(JWT, "[redacted-token]").replace(SECRETS, "[redacted-secret]").replace(BEARER, "$1 [redacted-token]");
+}
+
 export function redactText(s: string, opts: { maskUuids?: boolean } = {}): string {
   let out = s
     .replace(JWT, "[redacted-token]")

@@ -2,7 +2,8 @@ import type Anthropic from "@anthropic-ai/sdk";
 import type { AgentId } from "../lib/types";
 import { webSearch } from "./web-search";
 import { readFootrankStats } from "./supabase-read";
-import { listRepo, readRepoFile } from "./github-read";
+import { listRepo, readRepoFileLines } from "./github-read";
+import { searchCode } from "./code-search";
 import { dbRead } from "./db-read";
 import { saveSuggestion } from "../lib/suggestions";
 import { notify } from "../lib/notify";
@@ -14,6 +15,7 @@ type ToolName =
   | "read_footrank_stats"
   | "list_repo"
   | "read_repo_file"
+  | "search_code"
   | "save_suggestion"
   | "db_read";
 
@@ -44,8 +46,30 @@ const ALL_TOOLS: Record<ToolName, Anthropic.Tool> = {
   },
   read_repo_file: {
     name: "read_repo_file",
-    description: "Read one file's contents in the FootRank repo (e.g. 'lib/main.dart').",
-    input_schema: { type: "object", properties: { path: { type: "string" } }, required: ["path"] },
+    description:
+      "Read part of one file in the FootRank repo, with exact line numbers (e.g. path 'lib/main.dart'). Returns the commit read, the line range shown and the file's total line count. Without start_line/end_line it shows the first 250 lines; request later ranges to read further (max 400 lines per call). Quote line numbers only from this output.",
+    input_schema: {
+      type: "object",
+      properties: {
+        path: { type: "string" },
+        start_line: { type: "integer", description: "First line to show (1-based). Default 1." },
+        end_line: { type: "integer", description: "Last line to show (inclusive)." },
+      },
+      required: ["path"],
+    },
+  },
+  search_code: {
+    name: "search_code",
+    description:
+      "Search the pushed FootRank code for an exact text (case-sensitive, not a regex): a function or class name to find its definition and callers, an import, a test, or a string. Returns file:line matches. Optional path limits the search to a file or folder (e.g. 'lib/match' or 'test'). Then open a match with read_repo_file.",
+    input_schema: {
+      type: "object",
+      properties: {
+        query: { type: "string", description: "Exact text to find, e.g. 'canonicalCity(' or 'class MatchRepository'." },
+        path: { type: "string", description: "Optional file or folder to search within." },
+      },
+      required: ["query"],
+    },
   },
   save_suggestion: {
     name: "save_suggestion",
@@ -70,7 +94,7 @@ const ALL_TOOLS: Record<ToolName, Anthropic.Tool> = {
 };
 
 const BASE: ToolName[] = ["web_search", "read_footrank_stats", "db_read", "save_suggestion"];
-const BASE_CODE: ToolName[] = ["web_search", "read_footrank_stats", "db_read", "list_repo", "read_repo_file", "save_suggestion"];
+const BASE_CODE: ToolName[] = ["web_search", "read_footrank_stats", "db_read", "list_repo", "read_repo_file", "search_code", "save_suggestion"];
 
 const TECHNICAL: AgentId[] = ["cybersecurity", "engineering", "developer", "qa", "uxdesign", "devops", "legal"];
 const isTechnical = (a: AgentId) => TECHNICAL.includes(a);
@@ -92,7 +116,15 @@ export interface DispatchContext {
   guardPassed?: boolean; // true only when the claim guard verified every figure
   notify?: boolean; // false = never send the high-priority Telegram alert
   appendix?: string; // appended to a saved suggestion's body (unverified note + provenance)
+  codeCommit?: string; // read_repo_file / search_code only: the run's pinned FootRank commit
 }
+
+// Tools that read FootRank code and must all use the run's single pinned commit
+// (resolved once in agents/run-agent.ts, handed over by agents/free-loop.ts).
+export const PINNED_CODE_TOOLS: ReadonlySet<string> = new Set(["read_repo_file", "search_code"]);
+
+const NO_PINNED_COMMIT =
+  "No pinned FootRank commit for this run (GitHub could not be reached when the run started) — code reading is unavailable. Nothing was read.";
 
 // Fail-closed alert rule: a high-priority suggestion alerts ONLY with explicit
 // claim-guard approval. Missing context (e.g. a legacy caller) never alerts.
@@ -121,7 +153,13 @@ export async function dispatchTool(
     case "list_repo":
       return listRepo(String(input.path ?? ""));
     case "read_repo_file":
-      return readRepoFile(String(input.path));
+      // The commit always comes from the loop-supplied context (pinned once at
+      // run start), never from the model's input.
+      if (!ctx?.codeCommit) return NO_PINNED_COMMIT;
+      return readRepoFileLines(input.path, input.start_line, input.end_line, ctx.codeCommit);
+    case "search_code":
+      if (!ctx?.codeCommit) return NO_PINNED_COMMIT;
+      return searchCode(input.query, input.path, ctx.codeCommit);
     case "save_suggestion": {
       const priority = (["low", "medium", "high"].includes(String(input.priority))
         ? String(input.priority)

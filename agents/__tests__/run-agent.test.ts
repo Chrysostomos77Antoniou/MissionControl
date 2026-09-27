@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-const { runFreeLoop, writeMemory, logActivity, acquireAgentLock, releaseAgentLock, gradeAgentRun } = vi.hoisted(() => ({
+const { runFreeLoop, writeMemory, logActivity, acquireAgentLock, releaseAgentLock, gradeAgentRun, resolveFootRankCommit } = vi.hoisted(() => ({
+  resolveFootRankCommit: vi.fn(),
   runFreeLoop: vi.fn(),
   writeMemory: vi.fn(),
   logActivity: vi.fn(),
@@ -9,6 +10,10 @@ const { runFreeLoop, writeMemory, logActivity, acquireAgentLock, releaseAgentLoc
   gradeAgentRun: vi.fn(),
 }));
 vi.mock("../free-loop", () => ({ runFreeLoop }));
+vi.mock("../../tools/github-read", async (orig) => ({
+  ...(await orig<typeof import("../../tools/github-read")>()),
+  resolveFootRankCommit: (...a: unknown[]) => resolveFootRankCommit(...a),
+}));
 vi.mock("../../lib/supabase", () => ({ supabaseAdmin: {} }));
 vi.mock("../../lib/memory", () => ({ writeMemory: (...a: unknown[]) => writeMemory(...a), recentMemory: vi.fn().mockResolvedValue([]), logActivity: (...a: unknown[]) => logActivity(...a) }));
 vi.mock("../../lib/suggestions", () => ({
@@ -49,6 +54,8 @@ beforeEach(() => {
   releaseAgentLock.mockResolvedValue(true);
   gradeAgentRun.mockReset();
   gradeAgentRun.mockResolvedValue(undefined);
+  resolveFootRankCommit.mockReset();
+  resolveFootRankCommit.mockResolvedValue({ ok: false, reason: "GITHUB_REPO / GITHUB_TOKEN not set" });
 });
 
 describe("run-agent on the free loop", () => {
@@ -169,6 +176,35 @@ describe("run-agent on the free loop", () => {
     it("run-agent no longer exports group/single runners (all runs go through agents/cycle.ts)", async () => {
       const mod = await import("../run-agent");
       expect(Object.keys(mod).sort()).toEqual(["runAgent", "runAgentDetailed"]);
+    });
+  });
+
+  describe("pinned FootRank commit (7a)", () => {
+    const PIN = "27e1e5ac5a89cb9d5f5cb7ca6a1368afa0582a46";
+
+    it.each(["cybersecurity", "engineering", "developer", "qa", "uxdesign", "devops", "legal"] as const)(
+      "%s: the commit is resolved exactly once at run start and handed to the loop",
+      async (id) => {
+        resolveFootRankCommit.mockResolvedValue({ ok: true, sha: PIN });
+        await runOne(id);
+        expect(resolveFootRankCommit).toHaveBeenCalledTimes(1);
+        expect(resolveFootRankCommit.mock.invocationCallOrder[0]).toBeLessThan(runFreeLoop.mock.invocationCallOrder[0]);
+        expect(runFreeLoop.mock.calls[0][0].codeCommit).toBe(PIN);
+      },
+    );
+
+    it.each(["marketing", "growth", "community", "competitive", "copywriter"] as const)("%s (no code tools): nothing is resolved or pinned", async (id) => {
+      resolveFootRankCommit.mockResolvedValue({ ok: true, sha: PIN });
+      await runOne(id);
+      expect(resolveFootRankCommit).not.toHaveBeenCalled();
+      expect(runFreeLoop.mock.calls[0][0]).not.toHaveProperty("codeCommit");
+    });
+
+    it("if the commit cannot be resolved, no pin is passed (code tools fail closed), it is logged, and the run continues", async () => {
+      resolveFootRankCommit.mockResolvedValue({ ok: false, reason: "GitHub 503 while resolving the current commit" });
+      expect(await runOne("engineering")).toBe("cycle summary");
+      expect(runFreeLoop.mock.calls[0][0]).not.toHaveProperty("codeCommit");
+      expect(logActivity).toHaveBeenCalledWith("engineering", "code:pin-failed", "GitHub 503 while resolving the current commit");
     });
   });
 });
