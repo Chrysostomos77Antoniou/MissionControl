@@ -14,6 +14,10 @@
 // turn, times out read-only tools, turns thrown tool errors into explicit
 // error results (never retried), and reports an explicit status so callers
 // only treat a natural conclusion ("ok") as a successful cycle.
+// Finding gate (7b): when save_suggestion is offered, every successful
+// read-only tool result is recorded in a run-bound evidence ledger and gets
+// an evidence ref; save_suggestion findings are checked against that ledger
+// (lib/finding-gate.ts) and against duplicates before anything is saved.
 // Provider choice, quotas and the €0 hard stop all live in lib/free-llm.ts.
 
 import { freeLlm, type TaskTier } from "../lib/free-llm";
@@ -25,6 +29,10 @@ import { normalizeCategory } from "../lib/suggestion-category";
 import { redactText } from "../lib/redact";
 import { logActivity } from "../lib/memory";
 import { offeredToolNames, isToolOffered, rejectedToolMessage, SECURITY_TOOL_REJECTED } from "../lib/tool-guard";
+import { EVIDENCE_TOOLS, evidenceRefNote } from "../lib/evidence-ledger";
+import { renderFindingProse } from "../lib/finding-gate";
+import { createFindingRun, type FindingRun } from "../lib/finding-submit";
+import type { FindingHistory } from "../lib/finding-history";
 import type { AgentId } from "../lib/types";
 
 // ok        — the model concluded on its own (a turn with no tool calls).
@@ -119,6 +127,9 @@ export async function runFreeLoop(opts: {
   // The run's pinned FootRank commit (agents/run-agent.ts). Handed ONLY to the
   // code-reading tools, as loop-supplied context the model cannot set.
   codeCommit?: string;
+  // Existing/dismissed/rejected findings for duplicate detection (7b). When
+  // absent, the first submission loads it (fail-closed).
+  findingHistory?: FindingHistory | null;
 }): Promise<LoopOutput> {
   const { agent, tier, system, userMessage, dispatch = dispatchTool } = opts;
   const maxTurns = Math.max(1, Math.min(opts.maxTurns ?? 8, MAX_TURNS_CAP));
@@ -126,6 +137,8 @@ export async function runFreeLoop(opts: {
   const deadlineAt = now() + Math.min(opts.deadlineMs ?? LOOP_DEADLINE_MS, LOOP_DEADLINE_MS);
   const tools: LlmToolSpec[] = opts.tools.map(toToolSpec);
   const saveOnly = tools.filter((t) => t.name === "save_suggestion");
+  // One evidence ledger per investigation run (only when findings can be saved).
+  const findingRun: FindingRun | undefined = saveOnly.length ? createFindingRun({ commit: opts.codeCommit, history: opts.findingHistory ?? null }) : undefined;
   const messages: LlmMessage[] = [{ role: "user", content: userMessage }];
   const toolOutputs: string[] = [];
   let lastText = "";
@@ -176,23 +189,25 @@ export async function runFreeLoop(opts: {
       let input = call.input;
       let ctx: DispatchContext | undefined;
       if (call.name === "save_suggestion") {
-        // Deterministic claim guard: every figure must appear in (or, for
-        // ratios, be derivable from) this cycle's data. Unverified ones are
-        // marked and footnoted; only a fully verified suggestion may alert.
-        // Provenance is the provider/model that actually produced this turn.
-        const g = guardSuggestion(
-          { title: String(input.title ?? ""), body: String(input.body ?? ""), evidence: String(input.evidence ?? "") },
-          material,
-          `${res.provider}/${res.model}`,
-        );
-        const rawCategoryLength = String(input.category ?? "").length;
-        const cat = normalizeCategory(input.category);
-        input = { ...input, category: cat.category, title: g.title, body: g.body, ...(input.evidence !== undefined ? { evidence: g.evidence } : {}) };
-        ctx = { guardPassed: g.unverified.length === 0, appendix: g.footer };
-        if (!cat.valid) await safeLog(agent, "category:invalid", `replaced with "${cat.category}" (original was ${rawCategoryLength} chars; not logged)`);
+        // Deterministic claim guard over the finding's prose (title, claim,
+        // scenario, impact, disproof, proposed change): every figure must
+        // appear in (or, for ratios, be derivable from) this cycle's data.
+        // Unverified ones are marked and footnoted; only a fully verified
+        // finding may alert. Provenance is the provider/model of this turn.
+        // Evidence is NOT taken from the model's text: the gate renders it
+        // from the run's evidence ledger.
+        const prose = renderFindingProse(input);
+        const g = guardSuggestion({ title: prose.title, body: prose.body, evidence: "" }, material, `${res.provider}/${res.model}`);
+        if (input.category !== undefined) {
+          const rawCategoryLength = String(input.category ?? "").length;
+          const cat = normalizeCategory(input.category);
+          input = { ...input, category: cat.category };
+          if (!cat.valid) await safeLog(agent, "category:invalid", `replaced with "${cat.category}" (original was ${rawCategoryLength} chars; not logged)`);
+        }
+        ctx = { guardPassed: g.unverified.length === 0, appendix: g.footer, ...(findingRun ? { finding: { run: findingRun, title: g.title, body: g.body } } : {}) };
         if (g.unverified.length) await safeLog(agent, "claims:unverified", g.unverified.join(", ").slice(0, 200));
         // Logged only AFTER the guard: the stored line carries the marks.
-        await logActivity(agent, `tool:${call.name}`, guardedLogDetail(input, material));
+        await logActivity(agent, `tool:${call.name}`, guardedLogDetail({ class: input.class, priority: input.priority, title: g.title, body: g.body }, material));
       } else {
         await logActivity(agent, `tool:${call.name}`, JSON.stringify(input).slice(0, 300));
         if (opts.codeCommit && PINNED_CODE_TOOLS.has(call.name)) ctx = { codeCommit: opts.codeCommit };
@@ -215,6 +230,16 @@ export async function runFreeLoop(opts: {
         // not added to toolOutputs, so it can never support a claim.
         results.push({ role: "tool", toolCallId: call.id, name: call.name, content: `Tool error: ${call.name} failed (${why}). It was not retried. Treat this data as unavailable.`, isError: true });
         continue;
+      }
+      if (call.name === "save_suggestion") {
+        // The gate's reply is Mission Control's own text, not data: it is
+        // shown to the model but never becomes claim-guard material.
+        results.push({ role: "tool", toolCallId: call.id, name: call.name, content: out });
+        continue;
+      }
+      if (findingRun && EVIDENCE_TOOLS.has(call.name)) {
+        const ref = findingRun.ledger.record(call.name, input, out);
+        if (ref) out = `${out}\n\n${evidenceRefNote(ref)}`;
       }
       toolOutputs.push(out);
       results.push({ role: "tool", toolCallId: call.id, name: call.name, content: out });

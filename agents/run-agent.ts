@@ -9,6 +9,7 @@ import { openSuggestionsForAgent, allOpenSuggestionsDigest } from "../lib/sugges
 import { acquireAgentLock, releaseAgentLock } from "../lib/lock";
 import { suggestionsSince } from "../lib/suggestions";
 import { gradeAgentRun } from "../lib/evals";
+import { loadFindingHistory, historyDigest, type FindingHistory } from "../lib/finding-history";
 import type { AgentId, Suggestion } from "../lib/types";
 
 // Status logging must never change the outcome of a run.
@@ -68,10 +69,14 @@ export async function runAgentDetailed(spec: AgentSpec): Promise<AgentRunResult>
     // memory of what the agent last happened to write. A still-open finding
     // doesn't need re-saving; that's what made every cycle look "different"
     // even when the underlying picture hadn't actually changed.
-    const [open, crossAgent, recent] = await Promise.all([
+    // Finding history (7b): open / dismissed / done / gate-rejected findings,
+    // for the deterministic duplicate check. If it can't be loaded here, the
+    // first submission retries and fails closed.
+    const [open, crossAgent, recent, history] = await Promise.all([
       openSuggestionsForAgent(spec.id),
       allOpenSuggestionsDigest(spec.id),
       recentMemory(spec.id, 3),
+      loadFindingHistory().catch((): FindingHistory | null => null),
     ]);
     const openList = open.length
       ? open.map((s) => `- (${s.priority}) ${s.title}`).join("\n")
@@ -87,7 +92,11 @@ export async function runAgentDetailed(spec: AgentSpec): Promise<AgentRunResult>
     const recentList = recent.length
       ? recent.map((m) => `- (${new Date(m.cycle_at).toISOString().slice(0, 10)}) ${m.summary}`).join("\n")
       : "no prior cycle history yet";
-    const userMessage = `Your own findings currently OPEN and unresolved in the owner's inbox:\n${openList}\n\nDo not save a duplicate of any of these. If the evidence still supports one, that's fine and expected — it's already pending, leave it as-is. Only save something new if it's a genuinely distinct problem, or a material update to one of the above (say so explicitly if it's an update).\n\nOther agents' currently OPEN findings (for awareness only, titles/categories — not your job to act on these, but don't duplicate one or propose something that contradicts it without good reason):\n${crossList}\n\nYour own conclusions from your last few cycles (for continuity — build on this or note what's changed since, don't just re-run the same investigation from scratch):\n${recentList}\n\nRun your review now per your standard procedure.`;
+    const closedList = history ? historyDigest(history) : "";
+    const closedSection = closedList
+      ? `\n\nFindings recently DISMISSED by the owner or REJECTED by the evidence gate (last 90 days). Do not resubmit these; a duplicate is detected automatically and not saved:\n${closedList}`
+      : "";
+    const userMessage = `Your own findings currently OPEN and unresolved in the owner's inbox:\n${openList}\n\nDo not save a duplicate of any of these. If the evidence still supports one, that's fine and expected — it's already pending, leave it as-is. Only save something new if it's a genuinely distinct problem, or a material update to one of the above (say so explicitly if it's an update).\n\nOther agents' currently OPEN findings (for awareness only, titles/categories — not your job to act on these, but don't duplicate one or propose something that contradicts it without good reason):\n${crossList}${closedSection}\n\nYour own conclusions from your last few cycles (for continuity — build on this or note what's changed since, don't just re-run the same investigation from scratch):\n${recentList}\n\nRun your review now per your standard procedure.`;
 
     const cycleStart = new Date().toISOString();
     // Free-only path: the router picks an approved free model for this
@@ -104,6 +113,7 @@ export async function runAgentDetailed(spec: AgentSpec): Promise<AgentRunResult>
       // a successful run. Paired with the wrap-up nudge in run-loop.ts.
       maxTurns: 16,
       ...(codeCommit ? { codeCommit } : {}),
+      ...(history ? { findingHistory: history } : {}),
     });
     // Memory is written only for a natural conclusion ("ok"). A stopped run
     // (no free AI, deadline, failed write tool) or a maxed-out run has no

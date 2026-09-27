@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-const { runFreeLoop, writeMemory, logActivity, acquireAgentLock, releaseAgentLock, gradeAgentRun, resolveFootRankCommit } = vi.hoisted(() => ({
+const { runFreeLoop, writeMemory, logActivity, acquireAgentLock, releaseAgentLock, gradeAgentRun, resolveFootRankCommit, loadFindingHistory } = vi.hoisted(() => ({
   resolveFootRankCommit: vi.fn(),
+  loadFindingHistory: vi.fn(),
   runFreeLoop: vi.fn(),
   writeMemory: vi.fn(),
   logActivity: vi.fn(),
@@ -27,6 +28,10 @@ vi.mock("../../lib/lock", () => ({ acquireAgentLock: (...a: unknown[]) => acquir
 vi.mock("../../lib/health", () => ({ alertIfCredentialsBroken: vi.fn().mockResolvedValue(undefined) }));
 vi.mock("../../lib/consensus", () => ({ reviewCycleConsensus: vi.fn().mockResolvedValue(undefined) }));
 vi.mock("../../lib/evals", () => ({ gradeAgentRun: (...a: unknown[]) => gradeAgentRun(...a) }));
+vi.mock("../../lib/finding-history", async (orig) => ({
+  ...(await orig<typeof import("../../lib/finding-history")>()),
+  loadFindingHistory: (...a: unknown[]) => loadFindingHistory(...a),
+}));
 vi.mock("../../lib/anthropic", () => {
   throw new Error("the migrated agent path must not load lib/anthropic");
 });
@@ -56,6 +61,8 @@ beforeEach(() => {
   gradeAgentRun.mockResolvedValue(undefined);
   resolveFootRankCommit.mockReset();
   resolveFootRankCommit.mockResolvedValue({ ok: false, reason: "GITHUB_REPO / GITHUB_TOKEN not set" });
+  loadFindingHistory.mockReset();
+  loadFindingHistory.mockRejectedValue(new Error("no database in tests"));
 });
 
 describe("run-agent on the free loop", () => {
@@ -205,6 +212,33 @@ describe("run-agent on the free loop", () => {
       expect(await runOne("engineering")).toBe("cycle summary");
       expect(runFreeLoop.mock.calls[0][0]).not.toHaveProperty("codeCommit");
       expect(logActivity).toHaveBeenCalledWith("engineering", "code:pin-failed", "GitHub 503 while resolving the current commit");
+    });
+  });
+
+  describe("finding history (7b)", () => {
+    const p = { family: "defect" as const, fp: null, symbol: "_propose", files: ["matches_page.dart"], anchors: [], terms: [] };
+    const history = { entries: [
+      { id: "1", source: "open" as const, agent: "qa", title: "Still open", createdAt: "2026-09-26T00:00:00Z", print: p },
+      { id: "2", source: "dismissed" as const, agent: "developer", title: "Robust City Fallback for Match Filters", createdAt: "2026-09-26T21:47:33Z", print: p },
+      { id: "3", source: "rejected" as const, agent: "developer", title: "Teams can propose with fewer than 5 players", createdAt: "2026-09-27T10:00:00Z", print: p, rejectCode: "contradicted" as const },
+    ] };
+
+    it("dismissed and gate-rejected findings are shown to the agent compactly and the history is handed to the loop", async () => {
+      loadFindingHistory.mockResolvedValue(history);
+      await runOne("developer");
+      const o = runFreeLoop.mock.calls[0][0];
+      expect(o.findingHistory).toBe(history);
+      expect(o.userMessage).toContain("Findings recently DISMISSED by the owner or REJECTED by the evidence gate (last 90 days)");
+      expect(o.userMessage).toContain("- [rejected by the evidence gate: contradicted] Teams can propose with fewer than 5 players (matches_page.dart › _propose)");
+      expect(o.userMessage).toContain("- [dismissed by the owner] Robust City Fallback for Match Filters");
+      expect(o.userMessage).not.toContain("Still open (matches_page");
+    });
+
+    it("if the history cannot be loaded the run continues without it (the first submission retries and fails closed)", async () => {
+      await runOne("developer");
+      const o = runFreeLoop.mock.calls[0][0];
+      expect(o).not.toHaveProperty("findingHistory");
+      expect(o.userMessage).not.toContain("REJECTED by the evidence gate");
     });
   });
 });

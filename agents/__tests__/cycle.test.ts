@@ -28,6 +28,8 @@ vi.mock("../../lib/suggestions", () => ({
   saveSuggestion: m.saveSuggestion,
 }));
 vi.mock("../../lib/evals", () => ({ gradeAgentRun: m.gradeAgentRun }));
+// 7b: finding history (duplicate check) comes from the database; empty here.
+vi.mock("../../lib/finding-history", async (orig) => ({ ...(await orig<typeof import("../../lib/finding-history")>()), loadFindingHistory: vi.fn().mockResolvedValue({ entries: [] }) }));
 // The real run path pins a FootRank commit at run start; keep it off the network.
 vi.mock("../../tools/github-read", async (orig) => ({
   ...(await orig<typeof import("../../tools/github-read")>()),
@@ -529,11 +531,12 @@ describe("real run path (router mocked): no-change means zero LLM calls", () => 
     const notify = (await import("../../lib/notify")).notify as unknown as ReturnType<typeof vi.fn>;
     notify.mockReset();
     m.generate
-      .mockResolvedValueOnce({ text: "", toolCalls: [{ id: "c0", name: "save_suggestion", input: { category: "growth", title: "Engagement is 6%", body: "b", evidence: "none", priority: "high" } }], stopReason: "tool_calls", usage: {}, provider: "ollama", model: "qwen3.5:4b", tier: "medium", cost: 0, attempts: [] })
+      .mockResolvedValueOnce({ text: "", toolCalls: [{ id: "c0", name: "save_suggestion", input: { class: "product_idea", title: "Engagement is 6%", claim: "b", impact: "i", proposed_change: "p", priority: "high" } }], stopReason: "tool_calls", usage: {}, provider: "ollama", model: "qwen3.5:4b", tier: "medium", cost: 0, attempts: [] })
       .mockResolvedValueOnce({ text: "Engagement is 6%.", toolCalls: [], stopReason: "end", usage: {}, provider: "ollama", model: "qwen3.5:4b", tier: "medium", cost: 0, attempts: [] });
     const { deps } = realDeps();
     await runManual(["growth"], deps);
-    expect(m.saveSuggestion.mock.calls[0][0].title).toBe("Engagement is 6% [unverified]");
+    expect(m.saveSuggestion.mock.calls[0][0].title).toBe("[Idea] Engagement is 6% [unverified]");
+    expect(m.saveSuggestion.mock.calls[0][0].priority).toBe("low"); // 7b: ideas are never high priority
     expect(notify).not.toHaveBeenCalled();
     expect(m.writeMemory.mock.calls[0][1]).toMatch(/6% \[unverified\]/);
   });

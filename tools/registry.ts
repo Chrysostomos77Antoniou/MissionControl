@@ -5,9 +5,8 @@ import { readFootrankStats } from "./supabase-read";
 import { listRepo, readRepoFileLines } from "./github-read";
 import { searchCode } from "./code-search";
 import { dbRead } from "./db-read";
-import { saveSuggestion } from "../lib/suggestions";
+import { submitFinding, type FindingContext } from "../lib/finding-submit";
 import { notify } from "../lib/notify";
-import { normalizeCategory } from "../lib/suggestion-category";
 import { AGENT_BY_ID } from "../agents/registry";
 
 type ToolName =
@@ -71,24 +70,66 @@ const ALL_TOOLS: Record<ToolName, Anthropic.Tool> = {
       required: ["query"],
     },
   },
+  // 7b: structured finding submission. Checked by a deterministic evidence
+  // gate (lib/finding-gate.ts) and duplicate check (lib/finding-fingerprint.ts)
+  // before anything is saved.
   save_suggestion: {
     name: "save_suggestion",
     description:
-      "Save ONE recommendation to the owner's inbox. Be specific and actionable — the owner reviews each and clicks Okay to have you execute it.",
+      "Submit ONE structured finding to the owner's inbox. A deterministic gate checks it before saving: every evidence item must cite an evidence ref printed under a tool result from THIS run, with an excerpt copied exactly from that output (line numbers only as the tool printed them). " +
+      "Classes: verified_bug = a defect proven by the tool output (needs location file+symbol, >= 2 independent evidence items, a mismatch or absence assertion, and what you checked to disprove it; no hedging). plausible_risk = evidence-backed risk, not confirmed. product_idea = a product/growth idea, never a bug. " +
+      "A claim that something is missing/not checked needs an absence assertion citing a search_code (or db_read) ref that returned nothing. Unsupported bugs are downgraded or rejected; duplicates of open, dismissed or rejected findings are not saved.",
     input_schema: {
       type: "object",
       properties: {
-        category: { type: "string", description: "Short tag, e.g. 'bug', 'feature', 'security', 'growth'." },
+        class: { type: "string", enum: ["verified_bug", "plausible_risk", "product_idea"] },
         title: { type: "string", description: "One-line summary." },
-        body: { type: "string", description: "Detailed recommendation, with concrete rationale or steps." },
-        evidence: {
-          type: "string",
-          description:
-            "The specific tool call and result that supports this finding — e.g. \"db_read: select * from pg_policies where tablename='matches' returned 0 rows (no policy exists)\" or \"read_repo_file: lib/match/data/match_repository.dart:42 shows no index on scheduled_at\". If this is a strategic/creative recommendation with no single verifiable fact to cite (e.g. a marketing angle), say that plainly instead of inventing evidence — do not fabricate a citation.",
+        location: {
+          type: "object",
+          description: "Where the finding lives. Required for verified_bug; file must be one you read or searched in this run.",
+          properties: {
+            file: { type: "string", description: "Repo path, e.g. 'lib/rankings/data/ranking_repository.dart' (or 'db:<table>' for a database object)." },
+            symbol: { type: "string", description: "Function or class, e.g. 'RankingRepository.fetchPlayers'." },
+            line: { type: "integer", description: "Optional; only a line number shown by read_repo_file/search_code." },
+          },
         },
+        claim: { type: "string", description: "The exact claim, stated plainly." },
+        failure_scenario: { type: "string", description: "Concrete steps/state in which it goes wrong (bugs and risks)." },
+        impact: { type: "string", description: "Who is affected and how." },
+        evidence: {
+          type: "array",
+          description: "Evidence from THIS run's tool results.",
+          items: {
+            type: "object",
+            properties: {
+              ref: { type: "string", description: "The evidence ref printed under the tool result, e.g. 'ev3-1a2b3c'." },
+              file: { type: "string" },
+              start_line: { type: "integer" },
+              end_line: { type: "integer" },
+              excerpt: { type: "string", description: "Text copied exactly from that tool result." },
+            },
+            required: ["ref", "excerpt"],
+          },
+        },
+        assertion: {
+          type: "object",
+          description: "Machine-checkable core of a bug. mismatch: a_value occurs in evidence a_evidence and a different b_value in evidence b_evidence (1-based). absence: ref of a search_code/db_read from this run that returned nothing. presence: the quoted code itself (not enough for verified_bug).",
+          properties: {
+            kind: { type: "string", enum: ["mismatch", "absence", "presence"] },
+            a_evidence: { type: "integer" },
+            a_value: { type: "string" },
+            b_evidence: { type: "integer" },
+            b_value: { type: "string" },
+            ref: { type: "string" },
+          },
+          required: ["kind"],
+        },
+        what_checked_to_disprove: { type: "string", description: "What you searched/read to try to prove this wrong, and what it showed." },
+        proposed_change: { type: "string", description: "The concrete recommended change." },
         priority: { type: "string", enum: ["low", "medium", "high"] },
+        category: { type: "string", description: "Optional topic tag for product ideas, e.g. 'growth' or 'video-idea'." },
       },
-      required: ["category", "title", "body", "evidence", "priority"],
+      required: ["class", "title", "claim", "impact", "proposed_change", "priority"],
     },
   },
 };
@@ -117,6 +158,7 @@ export interface DispatchContext {
   notify?: boolean; // false = never send the high-priority Telegram alert
   appendix?: string; // appended to a saved suggestion's body (unverified note + provenance)
   codeCommit?: string; // read_repo_file / search_code only: the run's pinned FootRank commit
+  finding?: FindingContext; // save_suggestion only: the run's evidence ledger/history + guarded prose (7b)
 }
 
 // Tools that read FootRank code and must all use the run's single pinned commit
@@ -161,25 +203,17 @@ export async function dispatchTool(
       if (!ctx?.codeCommit) return NO_PINNED_COMMIT;
       return searchCode(input.query, input.path, ctx.codeCommit);
     case "save_suggestion": {
-      const priority = (["low", "medium", "high"].includes(String(input.priority))
-        ? String(input.priority)
-        : "medium") as "low" | "medium" | "high";
-      const evidence = String(input.evidence ?? "").trim();
-      const withEvidence = evidence ? `${String(input.body)}\n\n— Evidence: ${evidence}` : String(input.body);
-      const body = ctx?.appendix ? `${withEvidence}\n\n${ctx.appendix}` : withEvidence;
-      await saveSuggestion({
-        agent,
-        category: normalizeCategory(input.category).category,
-        title: String(input.title),
-        body,
-        priority,
-      });
-      // Suggestions with unverified figures are still saved for human review,
-      // but never push an immediate alert.
-      if (shouldAlert(priority, ctx)) {
-        await notify(`🔴 ${AGENT_BY_ID[agent]?.name ?? agent} flagged (high): ${String(input.title)}`);
+      // 7b: the deterministic gate + duplicate check decide what is saved and
+      // with which class/priority. Without loop-supplied run context nothing is
+      // saved (a legacy caller has no evidence ledger).
+      const finding = ctx?.finding ? { ...ctx.finding, ...(ctx.appendix ? { appendix: ctx.appendix } : {}) } : undefined;
+      const out = await submitFinding(agent, input, finding);
+      // Only a gate-verified bug can alert, and only with explicit claim-guard
+      // approval (unchanged 6a rule). Risks and ideas never alert.
+      if (out.saved && out.saved.finalClass === "verified_bug" && shouldAlert(out.saved.priority, ctx)) {
+        await notify(`🔴 ${AGENT_BY_ID[agent]?.name ?? agent} flagged (high): ${out.saved.title}`);
       }
-      return "Saved to the owner's suggestions inbox.";
+      return out.message;
     }
     default:
       return `Unknown tool: ${name}`;
