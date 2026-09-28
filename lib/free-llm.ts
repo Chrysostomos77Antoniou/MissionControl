@@ -25,6 +25,11 @@
 //     FREE_AI_QUOTA_EXHAUSTED and logs that marker.
 //   - Privacy: logs/records only provider, model, tier, result and token
 //     counts — never prompts, tool results or keys.
+//   - Provider switches: tool-call history produced by another provider is
+//     rewritten as provider-neutral text for the candidate about to run
+//     (lib/provider-history.ts); if that cannot be done faithfully the
+//     candidate is skipped without a request. Same-provider history is sent
+//     unchanged.
 
 import { assertGenericRequest, type LlmProvider, type LlmRequest, type LlmResponse, type ProviderId } from "./llm";
 import { LlmError, FREE_AI_QUOTA_EXHAUSTED, type LlmErrorKind } from "./llm-errors";
@@ -32,6 +37,7 @@ import { ollamaProvider, OLLAMA_MODEL } from "./providers/ollama";
 import { createGeminiProvider, GEMINI_FREE_MODELS, isGeminiFreeModel, type GeminiFreeModel } from "./providers/gemini";
 import { groqProvider, GROQ_MODEL, GROQ_FREE_LIMITS } from "./providers/groq";
 import { quotaDayStart, supabaseFreeUsageStore, type FreeUsageStore } from "./free-usage";
+import { historyForProvider, rememberToolCallProvider } from "./provider-history";
 
 export type TaskTier = "simple" | "medium" | "high";
 export const TASK_TIERS: readonly TaskTier[] = Object.freeze(["simple", "medium", "high"]);
@@ -122,7 +128,14 @@ export function candidatesFor(tier: TaskTier): readonly FreeModelRef[] {
 export const MAX_ATTEMPTS_PER_REQUEST = 4;
 const RATE_LIMIT_COOLDOWN_MS = 60_000;
 
-export type AttemptResult = "ok" | "skipped_ceiling" | "skipped_exhausted" | "skipped_cooldown" | "skipped_usage_unknown" | Lowercase<LlmErrorKind>;
+export type AttemptResult =
+  | "ok"
+  | "skipped_ceiling"
+  | "skipped_exhausted"
+  | "skipped_cooldown"
+  | "skipped_usage_unknown"
+  | "skipped_incompatible_history"
+  | Lowercase<LlmErrorKind>;
 
 export interface RouterEvent {
   tier: TaskTier;
@@ -201,6 +214,18 @@ export function createFreeLlmRouter(deps: FreeLlmRouterDeps = {}) {
       if (exhaustedFor.get(key) === dayStart.getTime()) { note(c, "skipped_exhausted"); continue; }
       if ((coolingUntil.get(key) ?? 0) > now().getTime()) { note(c, "skipped_cooldown"); quotaRelated = false; continue; }
 
+      // Tool-call history from another provider is never sent in its native
+      // form; if it can't be converted faithfully, this candidate is skipped
+      // before any usage is recorded or any request is made (fail closed).
+      const history = historyForProvider(c.provider, req.messages);
+      if (!history) {
+        note(c, "skipped_incompatible_history");
+        quotaRelated = false;
+        lastError = new LlmError("PROVIDER_UNAVAILABLE", `router: conversation history could not be safely converted for ${c.provider} — not sent`, { provider: "router" });
+        continue;
+      }
+      const attemptReq: LlmRequest = history === req.messages ? req : { ...req, messages: history };
+
       let reservation: string | null = null;
       const ceiling = dailyCeilingFor(c);
       if (ceiling !== null) {
@@ -245,7 +270,8 @@ export function createFreeLlmRouter(deps: FreeLlmRouterDeps = {}) {
       }
 
       try {
-        const res = await providerFor(c).generate(req);
+        const res = await providerFor(c).generate(attemptReq);
+        rememberToolCallProvider(res.toolCalls, c.provider);
         if (reservation) await store.complete(reservation, res.usage).catch(() => {});
         note(c, "ok");
         return { ...res, tier, cost: 0, attempts };
