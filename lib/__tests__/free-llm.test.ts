@@ -11,6 +11,7 @@ import {
   isAllowedFreeModel,
   FREE_ALLOWLIST,
   GEMINI_DAILY_CEILING,
+  GROQ_DAILY_CEILING,
   MAX_ATTEMPTS_PER_REQUEST,
   type RouterEvent,
   type TaskTier,
@@ -19,15 +20,46 @@ import type { FreeUsageStore } from "../free-usage";
 import { quotaDayStart } from "../free-usage";
 import { LlmError, FREE_AI_QUOTA_EXHAUSTED } from "../llm-errors";
 import type { LlmRequest } from "../llm";
+import { tierForAgent } from "../../agents/agent-tiers";
 
 // ---------- fakes ----------
 const KEY = ["TESTONLY", "router", "key", "42"].join("-");
-type Scenario = "ok" | "refused" | "402" | "429day" | "429min" | "500" | "400" | "badjson" | "hang";
+const GROQ_KEY = ["TESTONLY", "router", "groq", "key", "77"].join("-");
+type Scenario = "ok" | "refused" | "402" | "429day" | "429min" | "500" | "503" | "400" | "badjson" | "hang" | "blocked";
+const GROQ = "groq";
 const scenario: Record<string, Scenario> = {};
 const fetchMock = vi.fn();
 const j = (b: unknown, s = 200) => new Response(JSON.stringify(b), { status: s });
+function respondGroq(sc: Scenario, init: RequestInit): Promise<Response> {
+  const e = (status: number, message: string, extra: Record<string, unknown> = {}) => Promise.resolve(j({ error: { message, type: "invalid_request_error", ...extra } }, status));
+  switch (sc) {
+    case "ok":
+      return Promise.resolve(j({ choices: [{ index: 0, message: { role: "assistant", content: "from groq" }, finish_reason: "stop" }], usage: { prompt_tokens: 15, completion_tokens: 2 } }));
+    case "refused":
+      return Promise.reject(Object.assign(new TypeError("fetch failed"), { cause: { code: "ECONNREFUSED" } }));
+    case "402":
+      return e(402, "payment required");
+    case "blocked":
+      return e(400, "API access blocked: organization spending limit reached", { code: "blocked_api_access" });
+    case "429day":
+      return e(429, "Rate limit reached for model `m` on tokens per day (TPD): Limit 200000, Used 199990, Requested 900.", { type: "tokens", code: "rate_limit_exceeded" });
+    case "429min":
+      return e(429, "Rate limit reached for model `m` on requests per minute (RPM): Limit 30, Used 30, Requested 1.", { type: "requests", code: "rate_limit_exceeded" });
+    case "500":
+      return e(500, "internal server error");
+    case "503":
+      return e(503, "Service Unavailable");
+    case "400":
+      return e(400, "'messages' must be an array");
+    case "badjson":
+      return Promise.resolve(new Response("<html>", { status: 200 }));
+    case "hang":
+      return new Promise((_r, rej) => init.signal!.addEventListener("abort", () => rej(init.signal!.reason)));
+  }
+}
 function respond(target: string, init: RequestInit): Promise<Response> {
   const sc = scenario[target] ?? "ok";
+  if (target === GROQ) return respondGroq(sc, init);
   const isOllama = target === "ollama";
   switch (sc) {
     case "ok":
@@ -46,6 +78,9 @@ function respond(target: string, init: RequestInit): Promise<Response> {
       return Promise.resolve(j({ error: { code: 429, message: "check your plan and billing details", details: [{ violations: [{ quotaId: "GenerateRequestsPerMinutePerProjectPerModel-FreeTier" }] }] } }, 429));
     case "500":
       return Promise.resolve(j({ error: { code: 500, message: "internal" } }, 500));
+    case "503":
+    case "blocked":
+      return Promise.resolve(j({ error: { code: 503, message: "This model is currently experiencing high demand.", status: "UNAVAILABLE" } }, 503));
     case "400":
       return Promise.resolve(j({ error: { code: 400, message: "Invalid JSON payload" } }, 400));
     case "badjson":
@@ -54,7 +89,8 @@ function respond(target: string, init: RequestInit): Promise<Response> {
       return new Promise((_r, rej) => init.signal!.addEventListener("abort", () => rej(init.signal!.reason)));
   }
 }
-const targetOf = (url: string) => (url.startsWith("http://127.0.0.1:11434") ? "ollama" : (/models\/([^:]+):/.exec(url)?.[1] ?? "unknown"));
+const targetOf = (url: string) =>
+  url.startsWith("http://127.0.0.1:11434") ? "ollama" : url.startsWith("https://api.groq.com/") ? GROQ : (/models\/([^:]+):/.exec(url)?.[1] ?? "unknown");
 
 class MemStore implements FreeUsageStore {
   counts = new Map<string, number>();
@@ -111,6 +147,7 @@ let savedEnv: NodeJS.ProcessEnv;
 beforeEach(() => {
   savedEnv = { ...process.env };
   process.env.GEMINI_API_KEY = KEY;
+  process.env.GROQ_API_KEY = GROQ_KEY;
   for (const k of Object.keys(scenario)) delete scenario[k];
   store = new MemStore();
   events = [];
@@ -179,9 +216,19 @@ describe("80% quota ceiling (enforced before the request)", () => {
     store.counts.set("gemini:gemini-3.5-flash-lite", 400);
     store.counts.set("gemini:gemini-3.1-flash-lite", 450);
     const r = await router().generate("medium", req());
+    expect(r.provider).toBe("groq");
+    expect(called()).toEqual([GROQ]);
+    expect(r.attempts.map((a) => a.result)).toEqual(["skipped_ceiling", "skipped_ceiling", "ok"]);
+  });
+
+  it("6/7/29b. Gemini and Groq at their ceilings -> medium falls back to local Ollama without remote calls", async () => {
+    store.counts.set("gemini:gemini-3.5-flash-lite", 400);
+    store.counts.set("gemini:gemini-3.1-flash-lite", 400);
+    store.counts.set("groq:openai/gpt-oss-120b", GROQ_DAILY_CEILING);
+    const r = await router().generate("medium", req());
     expect(r.provider).toBe("ollama");
     expect(called()).toEqual(["ollama"]);
-    expect(r.attempts.map((a) => a.result)).toEqual(["skipped_ceiling", "skipped_ceiling", "ok"]);
+    expect(r.attempts.map((a) => a.result)).toEqual(["skipped_ceiling", "skipped_ceiling", "skipped_ceiling", "ok"]);
   });
 
   it("6b. gemini-3.8-flash is blocked at 16/day", async () => {
@@ -249,6 +296,7 @@ describe("error handling and fallback (finite, free-only)", () => {
     store.counts.set("gemini:gemini-3.8-flash", 16);
     store.counts.set("gemini:gemini-3.5-flash-lite", 400);
     store.counts.set("gemini:gemini-3.1-flash-lite", 400);
+    store.counts.set("groq:openai/gpt-oss-120b", GROQ_DAILY_CEILING);
     const e = await failure(router().generate("high", req()));
     expect(e.kind).toBe("QUOTA_EXHAUSTED");
     expect(e.message).toMatch(/^FREE_AI_QUOTA_EXHAUSTED: .*no paid fallback/);
@@ -256,16 +304,17 @@ describe("error handling and fallback (finite, free-only)", () => {
     expect(events).toContainEqual(expect.objectContaining({ marker: "FREE_AI_QUOTA_EXHAUSTED", tier: "high" }));
   });
 
-  it("12. 402 on Gemini -> ALL Gemini models blocked for the day; only free local Ollama is tried", async () => {
+  it("12. 402 on Gemini -> ALL Gemini models blocked for the day; only the next FREE options are tried", async () => {
     scenario["gemini-3.5-flash-lite"] = "402";
+    scenario[GROQ] = "503";
     const r = await router().generate("medium", req());
     expect(r.provider).toBe("ollama");
-    expect(called()).toEqual(["gemini-3.5-flash-lite", "ollama"]);
+    expect(called()).toEqual(["gemini-3.5-flash-lite", GROQ, "ollama"]);
     for (const m of ["gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.8-flash"]) expect(store.exhausted.has(`gemini:${m}`)).toBe(true);
     expect(events).toContainEqual(expect.objectContaining({ result: "quota_exhausted", billing: true }));
   });
 
-  it("12b. 402 on a high task -> stops (no Ollama for high tasks, no paid model)", async () => {
+  it("12b. 402 on a high task -> stops (no Ollama or Groq for high tasks, no paid model)", async () => {
     scenario["gemini-3.8-flash"] = "402";
     const e = await failure(router().generate("high", req()));
     expect(called()).toEqual(["gemini-3.8-flash"]);
@@ -294,9 +343,10 @@ describe("error handling and fallback (finite, free-only)", () => {
   it("14. provider unavailable -> finite fallback", async () => {
     scenario["gemini-3.5-flash-lite"] = "500";
     scenario["gemini-3.1-flash-lite"] = "refused";
+    scenario[GROQ] = "503";
     const r = await router().generate("medium", req());
     expect(r.provider).toBe("ollama");
-    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(fetchMock).toHaveBeenCalledTimes(4);
   });
 
   it("14b. timeout -> finite fallback", async () => {
@@ -324,14 +374,15 @@ describe("error handling and fallback (finite, free-only)", () => {
   it("16. model failure -> finite fallback", async () => {
     scenario["gemini-3.5-flash-lite"] = "badjson";
     scenario["gemini-3.1-flash-lite"] = "badjson";
+    scenario[GROQ] = "badjson";
     scenario.ollama = "badjson";
     const e = await failure(router().generate("medium", req()));
     expect(e.kind).toBe("MODEL_FAILURE");
-    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(fetchMock).toHaveBeenCalledTimes(4);
   });
 
   it("17. no provider/model is attempted twice in one request", async () => {
-    for (const k of ["ollama", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite"]) scenario[k] = "500";
+    for (const k of ["ollama", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", GROQ]) scenario[k] = "500";
     await failure(router().generate("simple", req()));
     const c = called();
     expect(new Set(c).size).toBe(c.length);
@@ -358,18 +409,20 @@ describe("error handling and fallback (finite, free-only)", () => {
   it("Gemini without a key is skipped without a request or a usage row", async () => {
     delete process.env.GEMINI_API_KEY;
     scenario.ollama = "refused";
-    await failure(router().generate("simple", req()));
-    expect(called()).toEqual(["ollama"]);
+    const r = await router().generate("simple", req());
+    expect(r.provider).toBe("groq");
+    expect(called()).toEqual(["ollama", GROQ]);
     expect(store.rows.filter((r) => r.model.startsWith("free:gemini"))).toHaveLength(0);
   });
 });
 
 describe("hard allowlist", () => {
-  it("allowlist is exactly the four approved free models", () => {
+  it("allowlist is exactly the five approved free models", () => {
     expect(FREE_ALLOWLIST.map((a) => `${a.provider}:${a.model}`).sort()).toEqual([
       "gemini:gemini-3.1-flash-lite",
       "gemini:gemini-3.5-flash-lite",
       "gemini:gemini-3.8-flash",
+      "groq:openai/gpt-oss-120b",
       "ollama:qwen3.5:4b",
     ]);
     expect(Object.isFrozen(FREE_ALLOWLIST)).toBe(true);
@@ -385,6 +438,11 @@ describe("hard allowlist", () => {
     ["22. 9router", "9router", "claude-opus-55"],
     ["23. paid gemini", "gemini", "gemini-3.1-pro-preview"],
     ["23b. paid gemini 2.5 pro", "gemini", "gemini-2.5-pro"],
+    ["other groq model", "groq", "openai/gpt-oss-20b"],
+    ["groq model under another provider", "gemini", "openai/gpt-oss-120b"],
+    ["cerebras", "cerebras", "gpt-oss-120b"],
+    ["xai / grok", "xai", "grok-4"],
+    ["openrouter", "openrouter", "openai/gpt-oss-120b"],
   ])("%s is rejected", (_n, provider, model) => {
     expect(isAllowedFreeModel(provider, model)).toBe(false);
     expect(() => assertAllowedFreeModel(provider, model)).toThrow(/not an approved free model/);
@@ -410,7 +468,7 @@ describe("hard allowlist", () => {
     await router().generate("simple", req());
     await router().generate("high", req());
     expect(called()).toEqual(["ollama", "gemini-3.8-flash"]);
-    for (const [u] of fetchMock.mock.calls) expect(["127.0.0.1:11434", "generativelanguage.googleapis.com"]).toContain(new URL(String(u)).host);
+    for (const [u] of fetchMock.mock.calls) expect(["127.0.0.1:11434", "generativelanguage.googleapis.com", "api.groq.com"]).toContain(new URL(String(u)).host);
   });
 
   it("the router source has no paid provider, no env-based selection, no retry loop", () => {
@@ -438,6 +496,12 @@ describe("usage records and privacy", () => {
     await failure(router().generate("medium", req()));
     await router().generate("high", req());
     expect(JSON.stringify(store.rows) + JSON.stringify(events)).not.toContain(KEY);
+    // Groq too: failing and succeeding calls, error text included.
+    for (const m of ["gemini-3.5-flash-lite", "gemini-3.1-flash-lite"]) scenario[m] = "503";
+    scenario[GROQ] = "400";
+    const e = await failure(router().generate("medium", req()));
+    await router().generate("simple", req());
+    expect(JSON.stringify(store.rows) + JSON.stringify(events) + e.message + String(e.stack)).not.toContain(GROQ_KEY);
   });
 
   it("events carry only tier/provider/model/result (+ counts)", async () => {
@@ -462,5 +526,210 @@ describe("result shape", () => {
     expect(r.cost).toBe(0);
     expect(r.attempts).toEqual([{ provider: "ollama", model: "qwen3.5:4b", result: "ok" }]);
     expect(FREE_AI_QUOTA_EXHAUSTED).toBe("FREE_AI_QUOTA_EXHAUSTED");
+  });
+});
+
+describe("Groq free-plan fallback", () => {
+  const GROQ_ROW = "groq:openai/gpt-oss-120b";
+
+  it("R1. Gemini unavailable (503) -> Groq", async () => {
+    scenario["gemini-3.5-flash-lite"] = "503";
+    scenario["gemini-3.1-flash-lite"] = "503";
+    const r = await router().generate("medium", req());
+    expect([r.provider, r.model, r.cost]).toEqual(["groq", "openai/gpt-oss-120b", 0]);
+    expect(called()).toEqual(["gemini-3.5-flash-lite", "gemini-3.1-flash-lite", GROQ]);
+    expect(r.attempts.map((a) => a.result)).toEqual(["provider_unavailable", "provider_unavailable", "ok"]);
+  });
+
+  it("R2/R3. Gemini + Groq unavailable -> Ollama only where the tier permits it", async () => {
+    for (const k of ["gemini-3.5-flash-lite", "gemini-3.1-flash-lite", GROQ]) scenario[k] = "503";
+    const r = await router().generate("medium", req());
+    expect(r.provider).toBe("ollama");
+    expect(called()).toEqual(["gemini-3.5-flash-lite", "gemini-3.1-flash-lite", GROQ, "ollama"]);
+    fetchMock.mockClear();
+    scenario["gemini-3.8-flash"] = "503";
+    const e = await failure(router().generate("high", req()));
+    expect(called()).toEqual(["gemini-3.8-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite"]);
+    expect(e.message).toMatch(/^FREE_AI_QUOTA_EXHAUSTED: .*no paid fallback/);
+  });
+
+  it("R4/R5. everything unavailable -> FREE_AI_QUOTA_EXHAUSTED, and only approved free hosts were contacted", async () => {
+    Object.assign(process.env, {
+      OPENAI_API_KEY: "x", ANTHROPIC_API_KEY: "x", XAI_API_KEY: "x", OPENROUTER_API_KEY: "x", CEREBRAS_API_KEY: "x",
+    });
+    for (const k of ["ollama", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", GROQ]) scenario[k] = "503";
+    const e = await failure(router().generate("medium", req()));
+    expect(e.message).toMatch(/^FREE_AI_QUOTA_EXHAUSTED/);
+    expect(e.kind).toBe("PROVIDER_UNAVAILABLE");
+    expect(events).toContainEqual(expect.objectContaining({ marker: "FREE_AI_QUOTA_EXHAUSTED", tier: "medium" }));
+    const hosts = new Set(fetchMock.mock.calls.map(([u]) => new URL(String(u)).host));
+    expect([...hosts].sort()).toEqual(["127.0.0.1:11434", "api.groq.com", "generativelanguage.googleapis.com"]);
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+  });
+
+  it("R6. no API keys at all -> Gemini and Groq make no request and no usage row; Ollama still works", async () => {
+    delete process.env.GEMINI_API_KEY;
+    delete process.env.GROQ_API_KEY;
+    const s = await router().generate("simple", req());
+    expect(s.provider).toBe("ollama");
+    const m = await router().generate("medium", req());
+    expect(m.provider).toBe("ollama");
+    expect(m.attempts.map((a) => `${a.provider}=${a.result}`)).toEqual([
+      "gemini=provider_unavailable", "gemini=provider_unavailable", "groq=provider_unavailable", "ollama=ok",
+    ]);
+    expect(called()).toEqual(["ollama", "ollama"]);
+    expect(store.rows.filter((r) => !r.model.startsWith("free:ollama"))).toHaveLength(0);
+    // High tasks never use the local 4B model: with no keys they stop.
+    fetchMock.mockClear();
+    const e = await failure(router().generate("high", req()));
+    expect(e.message).toMatch(/^FREE_AI_QUOTA_EXHAUSTED/);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("R8. Groq at its local daily ceiling -> Groq is NOT called", async () => {
+    expect(GROQ_DAILY_CEILING).toBe(500);
+    scenario["gemini-3.5-flash-lite"] = "503";
+    scenario["gemini-3.1-flash-lite"] = "503";
+    store.counts.set(GROQ_ROW, GROQ_DAILY_CEILING);
+    const r = await router().generate("medium", req());
+    expect(r.provider).toBe("ollama");
+    expect(called()).not.toContain(GROQ);
+    expect(r.attempts).toContainEqual({ provider: "groq", model: "openai/gpt-oss-120b", result: "skipped_ceiling" });
+  });
+
+  it("R8b. one below the ceiling -> allowed, and recorded BEFORE the request with cost 0", async () => {
+    scenario["gemini-3.5-flash-lite"] = "503";
+    scenario["gemini-3.1-flash-lite"] = "503";
+    store.counts.set(GROQ_ROW, GROQ_DAILY_CEILING - 1);
+    const reserveOrder: string[] = [];
+    const origReserve = store.reserve.bind(store);
+    store.reserve = async (k: string) => {
+      reserveOrder.push(`reserve:${k}:${fetchMock.mock.calls.length}`);
+      return origReserve(k);
+    };
+    const r = await router().generate("medium", req());
+    expect(r.provider).toBe("groq");
+    expect(store.counts.get(GROQ_ROW)).toBe(GROQ_DAILY_CEILING);
+    // Groq was reserved when 2 requests (the two Gemini attempts) had been sent, i.e. before its own.
+    expect(reserveOrder).toContain(`reserve:${GROQ_ROW}:2`);
+    expect(store.rows.find((x) => x.model === `free:${GROQ_ROW}`)).toEqual(expect.objectContaining({ cost: 0, input_tokens: 15, output_tokens: 2 }));
+  });
+
+  it("R8c. a persisted Groq 'exhausted today' marker blocks it without a call", async () => {
+    scenario["gemini-3.5-flash-lite"] = "503";
+    scenario["gemini-3.1-flash-lite"] = "503";
+    store.exhausted.add(GROQ_ROW);
+    const r = await router().generate("medium", req());
+    expect(r.provider).toBe("ollama");
+    expect(called()).not.toContain(GROQ);
+  });
+
+  it("R8d. Groq usage cannot be read or recorded -> Groq is not called (fail closed)", async () => {
+    scenario["gemini-3.5-flash-lite"] = "503";
+    scenario["gemini-3.1-flash-lite"] = "503";
+    store.failReserve = true; // Gemini can't be recorded either, so it isn't called
+    const r = await router().generate("medium", req());
+    expect(r.provider).toBe("ollama");
+    expect(called()).toEqual(["ollama"]);
+  });
+
+  it("R9. Groq 503 -> classified unavailable, next approved provider", async () => {
+    scenario["gemini-3.5-flash-lite"] = "503";
+    scenario["gemini-3.1-flash-lite"] = "503";
+    scenario[GROQ] = "503";
+    const r = await router().generate("medium", req());
+    expect(r.attempts.find((a) => a.provider === "groq")?.result).toBe("provider_unavailable");
+    expect(r.provider).toBe("ollama");
+    expect(store.exhausted.has(GROQ_ROW)).toBe(false);
+  });
+
+  it("R10. Groq per-minute 429 -> rate_limited, next provider, short cooldown (existing policy)", async () => {
+    scenario["gemini-3.5-flash-lite"] = "503";
+    scenario["gemini-3.1-flash-lite"] = "503";
+    scenario[GROQ] = "429min";
+    const rt = router();
+    const r = await rt.generate("medium", req());
+    expect(r.attempts.find((a) => a.provider === "groq")?.result).toBe("rate_limited");
+    expect(r.provider).toBe("ollama");
+    expect(store.exhausted.has(GROQ_ROW)).toBe(false);
+    fetchMock.mockClear();
+    const r2 = await rt.generate("medium", req());
+    expect(r2.attempts.find((a) => a.provider === "groq")?.result).toBe("skipped_cooldown");
+    expect(called()).not.toContain(GROQ);
+  });
+
+  it("Groq daily-limit 429 -> quota_exhausted and marked exhausted for the day", async () => {
+    scenario["gemini-3.5-flash-lite"] = "503";
+    scenario["gemini-3.1-flash-lite"] = "503";
+    scenario[GROQ] = "429day";
+    const rt = router();
+    await rt.generate("medium", req());
+    expect(store.exhausted.has(GROQ_ROW)).toBe(true);
+    fetchMock.mockClear();
+    await rt.generate("medium", req());
+    expect(called()).not.toContain(GROQ);
+  });
+
+  it("Groq billing / spend-limit block -> Groq exhausted for the day; never 'fixed' by paying", async () => {
+    for (const sc of ["402", "blocked"] as Scenario[]) {
+      store = new MemStore();
+      scenario["gemini-3.5-flash-lite"] = "503";
+      scenario["gemini-3.1-flash-lite"] = "503";
+      scenario[GROQ] = sc;
+      const r = await router().generate("medium", req());
+      expect(r.provider).toBe("ollama");
+      expect(store.exhausted.has(GROQ_ROW)).toBe(true);
+      // Gemini was not marked by Groq's billing wall.
+      expect(store.exhausted.has("gemini:gemini-3.5-flash-lite")).toBe(false);
+    }
+    expect(events).toContainEqual(expect.objectContaining({ provider: "groq", result: "quota_exhausted", billing: true }));
+  });
+
+  it("Groq invalid request -> returned immediately, no provider switching", async () => {
+    scenario["gemini-3.5-flash-lite"] = "503";
+    scenario["gemini-3.1-flash-lite"] = "503";
+    scenario[GROQ] = "400";
+    const e = await failure(router().generate("medium", req()));
+    expect(e.kind).toBe("INVALID_REQUEST");
+    expect(called()).not.toContain("ollama");
+  });
+
+  it("Groq timeout -> unavailable, next provider", async () => {
+    scenario["gemini-3.5-flash-lite"] = "503";
+    scenario["gemini-3.1-flash-lite"] = "503";
+    scenario[GROQ] = "hang";
+    const r = await router().generate("medium", req({ timeoutMs: 20 }));
+    expect(r.attempts.find((a) => a.provider === "groq")?.result).toBe("provider_unavailable");
+    expect(r.provider).toBe("ollama");
+  });
+
+  it("tier order: Groq comes after Gemini for simple/medium; Ollama stays last for medium; high is Gemini only", () => {
+    const order = (t: TaskTier) => candidatesFor(t).map((c) => `${c.provider}:${c.model}`);
+    expect(order("simple")).toEqual(["ollama:qwen3.5:4b", "gemini:gemini-3.5-flash-lite", "gemini:gemini-3.1-flash-lite", "groq:openai/gpt-oss-120b"]);
+    expect(order("medium")).toEqual(["gemini:gemini-3.5-flash-lite", "gemini:gemini-3.1-flash-lite", "groq:openai/gpt-oss-120b", "ollama:qwen3.5:4b"]);
+    expect(order("high")).toEqual(["gemini:gemini-3.8-flash", "gemini:gemini-3.5-flash-lite", "gemini:gemini-3.1-flash-lite"]);
+  });
+
+  it("Cybersecurity stays on the high tier, which never includes the local Qwen model or Groq", () => {
+    expect(tierForAgent("cybersecurity")).toBe("high");
+    const plan = candidatesFor(tierForAgent("cybersecurity"));
+    expect(plan.some((c) => c.provider === "ollama" || /qwen/i.test(c.model))).toBe(false);
+    // gpt-oss-120b has not passed the Mission Control security benchmark.
+    expect(plan.some((c) => c.provider === "groq" || /gpt-oss/i.test(c.model))).toBe(false);
+    expect(plan.every((c) => c.provider === "gemini")).toBe(true);
+  });
+
+  it("Cybersecurity can never route to Groq at runtime, even with every Gemini model down and Groq healthy", async () => {
+    for (const m of ["gemini-3.8-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite"]) scenario[m] = "503";
+    const e = await failure(router().generate(tierForAgent("cybersecurity"), req()));
+    expect(e.message).toMatch(/^FREE_AI_QUOTA_EXHAUSTED/);
+    expect(called()).not.toContain(GROQ);
+    expect(called()).not.toContain("ollama");
+    expect(store.rows.some((r) => r.model.includes("groq"))).toBe(false);
+    // Same when Gemini is blocked before any request (ceilings / no key).
+    fetchMock.mockClear();
+    delete process.env.GEMINI_API_KEY;
+    await failure(router().generate(tierForAgent("cybersecurity"), req()));
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });

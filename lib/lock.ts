@@ -16,10 +16,10 @@ export const CYCLE_LOCK_KEY = "__cycle__" as const;
 export type LockKey = AgentId | typeof CYCLE_LOCK_KEY;
 
 // Must exceed the longest possible locked section of one agent run:
-//   free loop  <= LOOP_DEADLINE_MS 20 min + one router call 5 min
-//                 + 5 read-only tool calls x 60 s = 30 min (agents/free-loop.ts MAX_LOOP_MS)
-//   grader     <= one router call, 5 min
-//   total      ~= 35 min  ->  45 min leaves a 10 min margin.
+//   free loop  <= LOOP_DEADLINE_MS 20 min + one router call 5.5 min
+//                 + 5 read-only tool calls x 60 s = 30.5 min (agents/free-loop.ts MAX_LOOP_MS)
+//   grader     <= one router call, 5.5 min
+//   total      ~= 36 min  ->  45 min leaves a 9 min margin.
 // A crashed run therefore blocks that agent for at most 45 min.
 export const AGENT_LOCK_TTL_MS = 45 * 60 * 1000;
 // Cycle-wide lock, for a runner that executes several agents one after

@@ -64,10 +64,11 @@ describe("free-only call graph", () => {
   const { files, packages } = walk();
   const rel = [...files].map((f) => f.slice(ROOT.length + 1).replace(/\\/g, "/")).sort();
 
-  it("reaches the free router and both free providers", () => {
+  it("reaches the free router and every free provider", () => {
     expect(rel).toContain("lib/free-llm.ts");
     expect(rel).toContain("lib/providers/ollama.ts");
     expect(rel).toContain("lib/providers/gemini.ts");
+    expect(rel).toContain("lib/providers/groq.ts");
     expect(rel).toContain("agents/free-loop.ts");
   });
 
@@ -86,14 +87,19 @@ describe("free-only call graph", () => {
   });
 
   it("no reachable file references a paid/other AI endpoint", () => {
-    const hosts = /api\.anthropic\.com|api\.openai\.com|localhost:20128|9router|api\.groq\.com|api\.mistral\.ai|openrouter\.ai/i;
+    const hosts = /api\.anthropic\.com|api\.openai\.com|localhost:20128|9router|api\.mistral\.ai|openrouter\.ai|api\.cerebras\.ai|api\.x\.ai/i;
     for (const f of files) expect(readFileSync(f, "utf8"), f).not.toMatch(hosts);
   });
 
-  it("the only AI endpoints reachable are local Ollama and Google's Generative Language API", () => {
+  it("Groq's API host appears only in its free-plan adapter", () => {
+    const users = rel.filter((f) => /api\.groq\.com/i.test(readFileSync(join(ROOT, f), "utf8")));
+    expect(users).toEqual(["lib/providers/groq.ts"]);
+  });
+
+  it("the only AI endpoints reachable are local Ollama, Google's Generative Language API and Groq's API", () => {
     const ai = new Set<string>();
     for (const f of files) for (const u of readFileSync(f, "utf8").match(/https?:\/\/[a-z0-9.:-]+/gi) ?? []) ai.add(u);
     const aiHosts = [...ai].filter((u) => !/api\.github\.com|api\.supabase\.com|api\.tavily\.com|api\.telegram\.org|github\.com/.test(u));
-    expect(aiHosts.sort()).toEqual(["http://127.0.0.1:11434", "https://generativelanguage.googleapis.com"]);
+    expect(aiHosts.sort()).toEqual(["http://127.0.0.1:11434", "https://api.groq.com", "https://generativelanguage.googleapis.com"]);
   });
 });

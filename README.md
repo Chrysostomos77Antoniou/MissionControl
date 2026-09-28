@@ -28,6 +28,19 @@ Next.js 15 (App Router) · TypeScript · `@anthropic-ai/sdk` (`claude-opus-4-8`)
 2. Copy `.env.local.example` → `.env.local` and fill in: `SUPABASE_URL`, `SUPABASE_SERVICE_KEY`, `ANTHROPIC_API_KEY`, `TAVILY_API_KEY`, `CRON_SECRET`, and for the technical agents `GITHUB_TOKEN` (repo read) + `GITHUB_REPO` (`owner/name`).
 3. Migrations in `supabase/migrations/` are already applied to the FootRank Supabase project.
 
+### Free AI providers (€0, fail-closed)
+
+Agents run only through the free-only router in `lib/free-llm.ts`. The provider/model allowlist is hard-coded there; no environment variable can add a provider or change a model, and there is no paid fallback — when every approved free option is unavailable or at its local daily ceiling, the run stops with `FREE_AI_QUOTA_EXHAUSTED`.
+
+| Provider | Model | Key (server-side `.env.local` only) | Local daily ceiling |
+|---|---|---|---|
+| Ollama (local, `127.0.0.1:11434`) | `qwen3.5:4b` | none | none (local) — never used for the `high` tier |
+| Google Gemini (AI Studio free tier) | `gemini-3.5-flash-lite`, `gemini-3.1-flash-lite`, `gemini-3.8-flash` | `GEMINI_API_KEY` — from a Google project **without billing** | 80% of the free limit (400 / 400 / 16 requests) |
+| Groq (Free plan) | `openai/gpt-oss-120b` | `GROQ_API_KEY` — from an organization on the **Free plan** (no payment method, never upgraded) | 500 requests (50% of 1,000/day) — `simple`/`medium` tiers only; never `high` (Cybersecurity) until security-benchmarked |
+
+A missing key makes that provider unavailable without any network request. Keys are never exposed to the browser (no `NEXT_PUBLIC_*`), never logged and never stored in `usage_log`.
+Cerebras is intentionally **not** supported: its API has no permanent free tier (a card-verified, 30-day trial credit only).
+
 ## Running
 
 - `npm run dev` — dashboard at http://localhost:3000 (agent roster + suggestions inbox + live feed + orchestrator chat)

@@ -12,7 +12,7 @@
 //
 // Pure types + helpers: no I/O, no SDK imports.
 
-export type ProviderId = "ollama" | "gemini";
+export type ProviderId = "ollama" | "gemini" | "groq";
 
 // JSON Schema object used for tool parameters and structured output.
 export interface JsonSchema {

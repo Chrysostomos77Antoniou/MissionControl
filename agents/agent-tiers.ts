@@ -2,9 +2,10 @@
 //
 // Callers never choose a provider or model — they pick a tier and the
 // free-only router (lib/free-llm.ts) decides. Recap of the router's plans:
-//   simple: local Qwen 3.5 4B first, then Gemini Flash-Lite
-//   medium: Gemini Flash-Lite first, local Qwen last resort
-//   high:   Gemini 3.8 Flash, then Flash-Lite — NEVER the local 4B model
+//   simple: local Qwen 3.5 4B first, then Gemini Flash-Lite, then Groq
+//   medium: Gemini Flash-Lite first, then Groq, local Qwen last resort
+//   high:   Gemini 3.8 Flash, then Flash-Lite — NEVER the local 4B model and
+//           NEVER Groq (not yet security-benchmarked)
 //
 // "high" is used only where a weak model is a real risk: security review and
 // writing code/migrations. Everything else that reasons over evidence is

@@ -69,6 +69,7 @@ import {
   CYCLE_LOCK_KEY,
 } from "../lock";
 import { MAX_LOOP_MS, MAX_ROUTER_CALL_MS, LOOP_DEADLINE_MS, MAX_TOOL_CALLS_PER_TURN, TOOL_TIMEOUT_MS } from "../../agents/free-loop";
+import { MAX_ATTEMPTS_PER_REQUEST } from "../free-llm";
 
 const T0 = new Date("2026-09-26T10:00:00.000Z");
 const at = (ms: number) => () => new Date(T0.getTime() + ms);
@@ -163,10 +164,12 @@ describe("run locks (6a)", () => {
     expect(CYCLE_LOCK_TTL_MS).toBeGreaterThan(AGENT_LOCK_TTL_MS);
   });
 
-  it("MAX_ROUTER_CALL_MS covers the real provider timeouts (ollama + 2 x gemini, at most 3 attempts)", () => {
+  it("MAX_ROUTER_CALL_MS covers the real provider timeouts (ollama + 2 x gemini + groq, at most 4 attempts)", () => {
     const timeout = (f: string) => Number(/const DEFAULT_TIMEOUT_MS = ([\d_]+)/.exec(readFileSync(join(__dirname, "..", "providers", f), "utf8"))![1].replace(/_/g, ""));
     const ollama = timeout("ollama.ts");
     const gemini = timeout("gemini.ts");
-    expect(Math.max(ollama + 2 * gemini, 3 * gemini)).toBeLessThanOrEqual(MAX_ROUTER_CALL_MS);
+    const groq = timeout("groq.ts");
+    expect(MAX_ATTEMPTS_PER_REQUEST).toBe(4);
+    expect(Math.max(ollama + 2 * gemini + groq, 3 * gemini + groq)).toBeLessThanOrEqual(MAX_ROUTER_CALL_MS);
   });
 });

@@ -81,9 +81,11 @@ export const MAX_TURNS_CAP = 16;
 // No NEW turn starts after this much wall-clock time. A turn already in
 // flight finishes (router call + its tool calls), then the loop stops.
 export const LOOP_DEADLINE_MS = 20 * 60 * 1000;
-// Worst case for ONE router call: the router tries at most 3 models, and the
-// slowest plans are ollama (180 s timeout) + 2 x gemini (60 s timeout).
-export const MAX_ROUTER_CALL_MS = 300 * 1000;
+// Worst case for ONE router call: the router tries at most 4 models, and the
+// slowest plans are ollama (180 s timeout) + 2 x gemini (60 s) + groq (30 s).
+// This is a bound used for lock TTLs, not a deadline: LOOP_DEADLINE_MS is
+// unchanged.
+export const MAX_ROUTER_CALL_MS = 330 * 1000;
 // Tool calls beyond this in a single turn are refused (not executed).
 export const MAX_TOOL_CALLS_PER_TURN = 5;
 // Read-only tools that take longer than this return a timeout error result.
